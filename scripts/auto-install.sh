@@ -760,7 +760,9 @@ main() {
     warn "Running as root is not recommended for this user-level installer."
     warn "Prefer running as a normal user to avoid permission conflicts."
   fi
-  trap cleanup_on_exit EXIT INT TERM
+  trap cleanup_on_exit EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   if [[ "$UNINSTALL_MODE" -eq 1 ]]; then
     run_uninstall_mode
     return 0
