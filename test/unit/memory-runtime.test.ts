@@ -232,6 +232,42 @@ test("memory runtime bridge keeps the legacy string search shape", async () => {
   assert.equal(result.results[0]?.content, "remembered item");
 });
 
+test("legacy memory searches apply kind and signal filters like structured searches", async (t) => {
+  const records = [
+    { id: "factual-episode", text: "a factual episode", score: 0.95, kind: "episode", signals: ["factual"] },
+    { id: "temporal-fact", text: "a temporal fact", score: 0.9, kind: "fact", signals: ["temporal"] },
+    { id: "temporal-episode", text: "a temporal episode", score: 0.85, kind: "episode", signals: ["temporal"] },
+  ];
+  const filters = [
+    { options: { kind: "episode" }, expected: ["factual-episode", "temporal-episode"] },
+    { options: { signals: ["factual"] }, expected: ["factual-episode"] },
+    { options: { kind: "episode", signals: ["factual"] }, expected: ["factual-episode"] },
+  ];
+
+  for (const query of ["recall past context", "tell me about your dreams"]) {
+    for (const { options, expected } of filters) {
+      await t.test(`${query}: ${JSON.stringify(options)}`, async () => {
+        const rpc = new FakeRpc();
+        const matchingRecords = (params: Record<string, unknown>, collection: string) => records
+          .filter((record) => !params.kind || record.kind === params.kind)
+          .filter((record) => !Array.isArray(params.signals) || params.signals.every((signal) => record.signals.includes(String(signal))))
+          .map((record) => ({ ...record, metadata: { collection } }));
+        rpc.searchTextCollections = async (params) => ({ results: matchingRecords(params, "user:u1") });
+        rpc.searchText = async (params) => ({ results: matchingRecords(params, String(params.collection)) });
+        const { manager } = await buildMemoryRuntimeBridge(async () => rpc as never, {})
+          .getMemorySearchManager();
+        const searchOptions = { userId: "u1", limit: 8, ...options };
+
+        const structured = await manager.search({ query, ...searchOptions }) as Array<{ snippet: string }>;
+        const legacy = await manager.search(query, searchOptions) as { results: Array<{ id: string; text: string }> };
+
+        assert.deepEqual(legacy.results.map((record) => record.id), expected, `${query}: legacy result scope must honor both filter options`);
+        assert.deepEqual(legacy.results.map((record) => record.text), structured.map((record) => record.snippet), `${query}: both API shapes must retrieve the same filtered memories`);
+      });
+    }
+  }
+});
+
 test("memory runtime bridge falls back to metadata text when search result text is blank", async () => {
   const metadataText = "Conversation info\n\n@Spartacus earliest remembered channel turn";
   const rpc = new FakeRpc();

@@ -92,6 +92,8 @@ function createMemorySearchManager(
             userId: opts.userId,
             agentId: opts.agentId,
             context: opts.context,
+            kind: opts.kind,
+            signals: opts.signals,
           }
         : queryOrParams;
       const queryText = firstString(params.query, params.text, params.input, params.q);
