@@ -3,8 +3,8 @@
 <div align="center">
   <img src="./docs/assets/libravdb-logo.svg" alt="LibraVDB" width="480">
 
-  <p><strong>Local-first memory kernel with causal graph reasoning, identity tracking, and hard PII enforcement.</strong><br/>
-  <em>768-dim vector search • 6-tier cognitive classification • Zero-cloud guarantee</em></p>
+  <p><strong>Local-first memory kernel with causal graph reasoning, identity tracking, and keyword-based reply rules.</strong><br/>
+  <em>768-dim vector search • 6-tier cognitive classification • Local inference supported</em></p>
 
   <p>
     <a href="https://www.npmjs.com/package/@xdarkicex/openclaw-memory-libravdb"><img src="https://img.shields.io/npm/v/%40xdarkicex%2Fopenclaw-memory-libravdb?label=release&color=5B21B6" alt="npm"></a>
@@ -237,7 +237,7 @@ The image pulls pre-built binaries from [GitHub Releases](https://github.com/zep
 
 ### Why LibraVDB over other memory plugins
 
-- **Truly local.** All embedding, search, and compaction runs on your hardware through a dedicated memory kernel. No cloud API calls, no data leaving your machine, no subscription fees. Works offline.
+- **Local operation.** With a local daemon and local embedding and summarization backends, memory operations run on your hardware and work offline after assets are installed. Remote daemon and model endpoints are optional and send data outside the host when configured.
 - **Handles long conversations.** Sessions with hundreds of turns are automatically compacted into searchable summaries. The agent can recall what was discussed in turn 5 even when you're on turn 200 — without blowing the context window.
 - **Never forgets a constraint.** Behavioral rules, preferences, and operating boundaries ("always use TLS", "prefers dark mode") are automatically detected and surfaced higher in recall than conversational noise. The agent can ask "what are my constraints?" and get a surgical answer.
 - **Automatic contradiction detection.** When you say "my email changed to jeff@anthropic.com", the old email is automatically marked as outdated — no manual cleanup, no stale facts confusing the agent.
@@ -251,7 +251,7 @@ The image pulls pre-built binaries from [GitHub Releases](https://github.com/zep
 - **Memory-mapped embedding cache.** Frequently embedded text is cached in a file-backed mmap region that survives daemon restarts. Cold starts are faster, repeat queries are instant.
 - **Pluggable summarization backend.** The memory kernel's extractive summarization can replace LLM-based compaction — zero tokens burned on summarization.
 - **Local-first inference.** GGUF, ONNX, or remote embedding backends. Hardware-native acceleration on Apple Silicon and NVIDIA. No cloud required.
-- **PII scrubbing & hard constraint rules.** Set rules with keywords — the rules engine scans every reply before dispatch. If a rule keyword is found, the reply is blocked and replaced. No LLM overhead, no latency, can't be bypassed. Names, employers, locations, API keys — anything you don't want leaking gets enforced at the reply layer, not the prompt layer.
+- **Keyword-based reply rules.** Set rules with keywords to block matching reply text when the host invokes the reply hook. Matching uses case-insensitive substrings without an LLM call. Choose keywords for names, employers, locations, or keys you want filtered; spelling changes, encodings, indirect references, tool output, and other delivery paths need separate controls.
 - **Operational CLI.** `libravdbd status`, `health`, `search`, `tenant evict`, `migrate` — live observability and management without interrupting active sessions.
 
 ### Identity Tracking & User Cards
@@ -319,8 +319,7 @@ so it acts as the foundational identity layer for the agent.
 
 ### PII Scrubbing & Hard Constraint Rules
 
-Agent replies are scanned for forbidden keywords before dispatch. Rules are stored
-locally and enforced through two layers:
+Rules are stored locally and provide reply filtering plus prompt guidance:
 
 **Agent tools for rules:**
 - `set_rule(rule, keywords, priority)` — create a rule with comma-separated keywords for reply scanning. Max 20 rules.
@@ -329,7 +328,7 @@ locally and enforced through two layers:
 - `delete_rule(rule_id)` — remove a rule.
 
 **Dual enforcement layers:**
-- **Reply scan (hard enforcement)** — the `before_agent_reply` hook runs `scanReply` on every agent response. If any rule keyword is found anywhere in the reply text, the response is blocked and replaced with "I cannot answer that." This happens at the dispatch layer — the model can't override it, hallucinate around it, or leak PII. Substring match, case-insensitive, zero LLM overhead.
+- **Reply scan** — when the host invokes `before_agent_reply`, `scanReply` checks its `cleanedBody`. If a rule keyword appears, the hook requests a refusal reply: "I cannot answer that." This is case-insensitive substring matching, with no semantic or encoded-text detection. Verify that your OpenClaw version supports the hook and honors its result; it does not cover every possible output path.
 - **System prompt (behavioral guidance)** — rules are injected at `prependSystemContext` level (AGENTS.md equivalent) so the model follows behavioral constraints ("always use TypeScript", "never delete files without asking").
 
 **Example:**
