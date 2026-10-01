@@ -4438,22 +4438,28 @@ test("afterTurn fails loudly when the daemon confirms none of the batch", async 
 });
 
 test("commitTurn retries the unconfirmed suffix after a partial daemon acknowledgment", async () => {
-  const client = new FakeClient();
-  const sessionId = "s1-commit-partial-ack";
-  const messages = [makeMessage("user", "question", "partial-u"), makeMessage("assistant", "reply", "partial-a")];
-  client.afterTurnResponses = [
-    { cursor: { lastProcessedIndex: 0, sessionVersion: 1, manifestTailHash: "partial" } },
-    { cursor: { lastProcessedIndex: 1, sessionVersion: 2, manifestTailHash: "complete" } },
-  ];
-  const engine = buildContextEngineFactory(fakeRuntime(client), { userId: "fixed-user" });
-  const args = { advancementKey: "adv-partial-ack", sessionId, messages };
+  for (const identity of ["ids", "idless"] as const) {
+    const client = new FakeClient();
+    const sessionId = `s1-commit-partial-ack-${identity}`;
+    const messagesWithIds = [makeMessage("user", "question", "partial-u"), makeMessage("assistant", "reply", "partial-a")];
+    const messages = identity === "ids" ? messagesWithIds : messagesWithIds.map(({ role, content }) => ({ role, content }));
+    client.afterTurnResponses = [
+      { cursor: { lastProcessedIndex: 0, sessionVersion: 1, manifestTailHash: "partial" } },
+      { cursor: { lastProcessedIndex: 1, sessionVersion: 2, manifestTailHash: "complete" } },
+    ];
+    const engine = buildContextEngineFactory(fakeRuntime(client), { userId: "fixed-user" });
+    const args = { advancementKey: `adv-partial-ack-${identity}`, sessionId, messages };
 
-  await assert.rejects(engine.commitTurn(args), /confirmed only 1 of 2 messages/);
-  assert.equal(manifestStore.load(sessionId).turns.length, 1);
-  assert.equal((await engine.commitTurn(args)).status, "committed");
-  assert.equal(manifestStore.load(sessionId).turns.length, 2);
-  assert.deepEqual(client.calls.filter((call) => call.method === "afterTurnKernel")[1]!.params.messages, [messages[1]]);
-  assert.equal((await engine.commitTurn(args)).status, "duplicate");
+    await assert.rejects(engine.commitTurn(args), /confirmed only 1 of 2 messages/);
+    assert.equal(manifestStore.load(sessionId).turns.length, 1);
+    const replacement = buildContextEngineFactory(fakeRuntime(client), { userId: "fixed-user" });
+    assert.equal((await replacement.commitTurn(args)).status, "committed");
+    assert.equal(manifestStore.load(sessionId).turns.length, 2);
+    const outgoing = client.calls.filter((call) => call.method === "afterTurnKernel")[1]!.params.messages as Array<{ role: string; content: string }>;
+    assert.deepEqual(outgoing.map(({ role, content }) => ({ role, content })), [{ role: "assistant", content: "reply" }]);
+    assert.deepEqual(manifestStore.load(sessionId).turns.map((turn) => turn.contentHash), messages.map((message) => manifestStore.hashString(message.content)));
+    assert.equal((await replacement.commitTurn(args)).status, "duplicate");
+  }
 });
 
 test("cursor-gap repair persists only confirmed seed messages and leaves failed commits retryable", async () => {

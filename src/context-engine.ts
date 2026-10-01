@@ -489,6 +489,8 @@ export const FLUSH_ASYNC_INGESTION = Symbol("flushAsyncIngestion");
  * host-supplied argument.
  */
 const CAPTURE_INGESTION = Symbol("libravdbCaptureIngestion");
+/** Stable synthetic message identities for retries of one durable advancement. */
+const ADVANCEMENT_IDENTITY = Symbol("libravdbAdvancementIdentity");
 
 let maxOptimizationMemoCacheSize = 50000;
 const metadataEnvelopeCache = new Map<string, string>();
@@ -3752,6 +3754,7 @@ export function buildContextEngineFactory(
           prePromptMessageCount: args.prePromptMessageCount,
           isHeartbeat: args.isHeartbeat,
           runtimeContext: args.runtimeContext,
+          [ADVANCEMENT_IDENTITY]: key || undefined,
           [CAPTURE_INGESTION]: (handle) => { ingestion = handle; },
         });
         // The host defines "duplicate" as "this exact advancementKey was already
@@ -3832,6 +3835,7 @@ export function buildContextEngineFactory(
       isHeartbeat?: boolean;
       tokenBudget?: number;
       runtimeContext?: Record<string, unknown>;
+      [ADVANCEMENT_IDENTITY]?: string;
       [CAPTURE_INGESTION]?: (ingestion: Promise<void>) => void;
     }) {
       const sessionId = requireSessionId(args.sessionId, "afterTurn");
@@ -3849,20 +3853,22 @@ export function buildContextEngineFactory(
         const source = recoveryPending
           ? args.messages
           : selectAfterTurnMessages(args.messages, args.prePromptMessageCount, logger);
-        // The same outbox retry carries the same source transcript. Stable
-        // recovery IDs preserve a single-message ACK prefix even when the
-        // host omitted IDs; ordinary turns keep their existing ID policy.
-        const recoverySource = recoveryPending ? source.map((message, index) => {
+        // The same advancement retry carries the same source transcript.
+        // Preserve single-message ACK prefixes even when the host omitted IDs.
+        // Legacy afterTurn calls without advancement keys keep their ID policy.
+        const identityScope = recoveryPending ? `recovery:${sessionId}` : args[ADVANCEMENT_IDENTITY];
+        const identifiedSource = identityScope ? source.map((message, index) => {
           if (typeof message.id === "string" && message.id.length > 0) return message;
           const hash = createHash("sha256").update(JSON.stringify([
             sessionId,
+            identityScope,
             index,
             message.role,
             normalizeKernelContent(message.content, { retainOpenClawContext: true }),
           ])).digest("hex");
-          return { ...message, id: `libravdb-recovery:${hash}` };
+          return { ...message, id: `libravdb-ingest:${hash}` };
         }) : source;
-        const normalized = normalizeKernelMessages(recoverySource, { retainOpenClawContext: true });
+        const normalized = normalizeKernelMessages(identifiedSource, { retainOpenClawContext: true });
         return recoveryPending
           ? boundAfterTurnMessagesForIngest(normalized, logger, sessionId)
           : normalized;
