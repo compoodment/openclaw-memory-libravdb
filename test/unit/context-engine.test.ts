@@ -4437,6 +4437,59 @@ test("afterTurn fails loudly when the daemon confirms none of the batch", async 
   );
 });
 
+test("commitTurn retries the unconfirmed suffix after a partial daemon acknowledgment", async () => {
+  const client = new FakeClient();
+  const sessionId = "s1-commit-partial-ack";
+  const messages = [makeMessage("user", "question", "partial-u"), makeMessage("assistant", "reply", "partial-a")];
+  client.afterTurnResponses = [
+    { cursor: { lastProcessedIndex: 0, sessionVersion: 1, manifestTailHash: "partial" } },
+    { cursor: { lastProcessedIndex: 1, sessionVersion: 2, manifestTailHash: "complete" } },
+  ];
+  const engine = buildContextEngineFactory(fakeRuntime(client), { userId: "fixed-user" });
+  const args = { advancementKey: "adv-partial-ack", sessionId, messages };
+
+  await assert.rejects(engine.commitTurn(args), /confirmed only 1 of 2 messages/);
+  assert.equal(manifestStore.load(sessionId).turns.length, 1);
+  assert.equal((await engine.commitTurn(args)).status, "committed");
+  assert.equal(manifestStore.load(sessionId).turns.length, 2);
+  assert.deepEqual(client.calls.filter((call) => call.method === "afterTurnKernel")[1]!.params.messages, [messages[1]]);
+  assert.equal((await engine.commitTurn(args)).status, "duplicate");
+});
+
+test("cursor-gap repair persists only confirmed seed messages and leaves failed commits retryable", async () => {
+  for (const confirmation of ["another-gap", "none", "partial"] as const) {
+    const client = new FakeClient();
+    const sessionId = `s1-commit-gap-${confirmation}`;
+    const engine = buildContextEngineFactory(fakeRuntime(client), { userId: "fixed-user" });
+    const messages = [
+      makeMessage("user", "old question", `${confirmation}-u1`),
+      makeMessage("assistant", "old reply", `${confirmation}-a1`),
+      makeMessage("user", "new question", `${confirmation}-u2`),
+      makeMessage("assistant", "new reply", `${confirmation}-a2`),
+    ];
+    client.afterTurnResponses = [{ cursor: { lastProcessedIndex: 1, sessionVersion: 1, manifestTailHash: "old" } }];
+    await engine.afterTurn({ sessionId, messages: messages.slice(0, 2) });
+    await flushIngestion(engine);
+
+    client.afterTurnResponses = [
+      { cursor: { lastProcessedIndex: 0, sessionVersion: 1, manifestTailHash: "" } },
+      { cursor: {
+        lastProcessedIndex: confirmation === "partial" ? 1 : -1,
+        sessionVersion: 1,
+        manifestTailHash: confirmation === "another-gap" ? "" : "confirmed-tail",
+      } },
+    ];
+    const args = { advancementKey: `adv-gap-${confirmation}`, sessionId, messages, prePromptMessageCount: 2 };
+    await assert.rejects(engine.commitTurn(args), /Daemon confirmed (?:no|only 2 of 4) messages/);
+    assert.equal(manifestStore.load(sessionId).turns.length, confirmation === "partial" ? 2 : 0);
+
+    // The same logical turn must be allowed to finish after the daemon recovers.
+    client.afterTurnResponse = { cursor: { lastProcessedIndex: 3, sessionVersion: 2, manifestTailHash: "recovered" } };
+    assert.equal((await engine.commitTurn(args)).status, "committed");
+    assert.equal((await engine.commitTurn(args)).status, "duplicate");
+  }
+});
+
 test("bootstrap does not orphan an ingestion that is still in flight", async () => {
   const client = new FakeClient();
   let inFlight = 0;

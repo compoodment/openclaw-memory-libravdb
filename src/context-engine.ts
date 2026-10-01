@@ -22,7 +22,7 @@ import {
 } from "@xdarkicex/libravdb-contracts";
 import { resolveIdentity, type ResolvedIdentity } from "./identity.js";
 import { resolveUserCollection } from "./memory-scopes.js";
-import { manifestStore } from "./manifest.js";
+import { manifestStore, type TurnManifest } from "./manifest.js";
 import { TurnMemoryCache, extractQueryHint, isNewUserTurn } from "./turn-cache.js";
 
 /** Host advancement keys whose turn is durably ingested, so an exact retry answers "duplicate". */
@@ -2002,6 +2002,35 @@ function extractCursorFromResult(result: unknown): CursorFromDaemon | undefined 
   return undefined;
 }
 
+/** Persist the confirmed prefix, but keep the logical turn retryable until complete. */
+function persistAcknowledgedBatch(
+  manifest: TurnManifest,
+  messages: KernelCompatibleMessage[],
+  startIndex: number,
+  result: unknown,
+): void {
+  const cursor = extractCursorFromResult(result);
+  // Legacy daemons without cursors retain their optimistic ACK behavior.
+  // An empty tail hash is the daemon's explicit rejection of the batch.
+  const ackCount = cursor
+    ? cursor.manifestTailHash ? Math.max(0, cursor.lastProcessedIndex - startIndex + 1) : 0
+    : messages.length;
+  const ackedMessages = messages.slice(0, ackCount);
+  if (ackedMessages.length === 0) {
+    throw new Error(
+      `[LibraVDB] Daemon confirmed no messages for session ${manifest.sessionId} ` +
+      `(lastProcessedIndex=${cursor?.lastProcessedIndex}, batch started at ${startIndex}).`,
+    );
+  }
+  manifestStore.save(manifestStore.appendACKedMessages(manifest, ackedMessages, startIndex));
+  if (ackedMessages.length < messages.length) {
+    throw new Error(
+      `[LibraVDB] Daemon confirmed only ${ackedMessages.length} of ${messages.length} messages ` +
+      `for session ${manifest.sessionId}; the unconfirmed suffix must be retried.`,
+    );
+  }
+}
+
 /**
  * Builds the context engine factory with the given client getter.
  */
@@ -3680,11 +3709,6 @@ export function buildContextEngineFactory(
      *   lost is the repeat occurrence.
      * - A daemon that answers without a cursor is ACKed optimistically, so for those
      *   the manifest records what was sent rather than what was confirmed.
-     * - A daemon that returns a cursor confirming none of the batch leaves the queued
-     *   task resolving normally, so this reports "committed" for a turn that was never
-     *   stored. That is a defect in afterTurn's cursor reconciliation rather than in
-     *   this contract, and is fixed separately; until that lands, this method is only
-     *   as trustworthy as the ingest beneath it.
      *
      * Concurrent calls carrying the same key are serialized on one in-flight promise,
      * so at most one of them performs the ingest. The others reject with the same
@@ -3893,88 +3917,38 @@ export function buildContextEngineFactory(
           } as unknown as Parameters<typeof client.afterTurnKernel>[0]);
           if (!lifecycleIsCurrent()) throw new SessionLifecycleChangedError();
 
-          updateContinuityCache(args.sessionKey ?? sessionId, ingestMessages);
-
-          // Reconcile manifest with daemon-confirmed cursor.
-          // The daemon returns a cursor even when it ingests zero messages
-          // (e.g. gap detected, all messages deduped). Trust its
-          // lastProcessedIndex over our optimistic startIndex math.
-          let daemonCursor = extractCursorFromResult(result);
-          let repairedCursorGap = false;
-
-          if (daemonCursor) {
-            if (!daemonCursor.manifestTailHash) {
-              // Daemon detected a gap: its DB is behind our manifest.
-              // It did NOT ingest our messages. Reset the manifest so the
-              // next turn does a full re-sync.
-              logger.warn?.(
-                `[LibraVDB] Daemon reported cursor gap for session ${sessionId}. ` +
-                `Resetting manifest for full re-sync next turn.`,
-              );
-              const seedMessages = boundAfterTurnMessagesForIngest(
-                normalizeKernelMessages(args.messages, { retainOpenClawContext: true }),
-                logger,
-                sessionId,
-              );
-              const emptyManifest = manifestStore.createEmpty(sessionId);
-              if (seedMessages.length > 0) {
-                // Recover in the same serialized task. The retry deliberately
-                // omits a cursor: the daemon just proved its durable history
-                // is behind ours, so claiming the old index again would cause
-                // another gap and strand compaction on a singleton turn.
-                result = await client.afterTurnKernel({
-                  sessionId,
-                  sessionKey: args.sessionKey,
-                  userId,
-                  messages: seedMessages,
-                  isHeartbeat: args.isHeartbeat,
-                } as unknown as Parameters<typeof client.afterTurnKernel>[0]);
-                if (!lifecycleIsCurrent()) throw new SessionLifecycleChangedError();
-                manifestStore.save(
-                  manifestStore.appendACKedMessages(emptyManifest, seedMessages, 0),
-                );
-                repairedCursorGap = true;
-                daemonCursor = extractCursorFromResult(result);
-                logger.info?.(
-                  `[LibraVDB] Re-seeded daemon session ${sessionId} with ${seedMessages.length} source messages after cursor gap.`,
-                );
-              } else {
-                manifestStore.save(emptyManifest);
-              }
-            } else if (ingestMessages.length > 0) {
-              // Normal path: reconcile to what the daemon actually confirmed.
-              const confirmedIndex = daemonCursor.lastProcessedIndex;
-              const ackCount = Math.max(0, confirmedIndex - startIndex + 1);
-              if (ackCount === 0) {
-                // The cursor the daemon returned sits before this batch, so it
-                // confirmed none of these messages. Falling through here left
-                // the manifest un-advanced with no diagnostic, so the same
-                // messages were re-sent on every subsequent turn and the
-                // session could never make progress. Fail instead: the catch
-                // below turns this into the same warning every other ingest
-                // failure produces, and skips the post-ingest best-effort work
-                // that would otherwise run for a turn that was never stored.
-                throw new Error(
-                  `[LibraVDB] Daemon confirmed no messages for session ${sessionId} ` +
-                  `(lastProcessedIndex=${confirmedIndex}, batch started at ${startIndex}).`,
-                );
-              }
-              const ackedMessages = ingestMessages.slice(0, ackCount);
-              const updatedManifest = manifestStore.appendACKedMessages(
-                manifest,
-                ackedMessages,
-                startIndex,
-              );
-              manifestStore.save(updatedManifest);
-            }
-          } else if (!repairedCursorGap && ingestMessages.length > 0) {
-            // Legacy daemon (no cursor in response): optimistic ACK.
-            const updatedManifest = manifestStore.appendACKedMessages(
-              manifest,
-              ingestMessages,
-              startIndex,
+          // Reconcile both normal ingestion and cursor-gap recovery against
+          // the daemon's confirmation before reporting a durable logical turn.
+          const daemonCursor = extractCursorFromResult(result);
+          if (daemonCursor && !daemonCursor.manifestTailHash) {
+            logger.warn?.(
+              `[LibraVDB] Daemon reported cursor gap for session ${sessionId}. ` +
+              `Resetting manifest and re-seeding from source history.`,
             );
-            manifestStore.save(updatedManifest);
+            const seedMessages = boundAfterTurnMessagesForIngest(
+              normalizeKernelMessages(args.messages, { retainOpenClawContext: true }),
+              logger,
+              sessionId,
+            );
+            const emptyManifest = manifestStore.createEmpty(sessionId);
+            // The daemon has disproved the old manifest. Clear it even if the
+            // recovery RPC fails, so a subsequent retry cannot skip lost data.
+            manifestStore.save(emptyManifest);
+            // Omit the stale cursor to recover in the same serialized task.
+            result = await client.afterTurnKernel({
+              sessionId,
+              sessionKey: args.sessionKey,
+              userId,
+              messages: seedMessages,
+              isHeartbeat: args.isHeartbeat,
+            } as unknown as Parameters<typeof client.afterTurnKernel>[0]);
+            if (!lifecycleIsCurrent()) throw new SessionLifecycleChangedError();
+            persistAcknowledgedBatch(emptyManifest, seedMessages, 0, result);
+            logger.info?.(
+              `[LibraVDB] Re-seeded daemon session ${sessionId} with ${seedMessages.length} source messages after cursor gap.`,
+            );
+          } else {
+            persistAcknowledgedBatch(manifest, ingestMessages, startIndex, result);
           }
 
           // Everything above is the durable part of the turn: the daemon has
@@ -3983,6 +3957,7 @@ export function buildContextEngineFactory(
           // commit, because asking the host to retry an already-durable turn
           // is worse than losing a prediction or a warm cache entry.
           try {
+            updateContinuityCache(args.sessionKey ?? sessionId, ingestMessages);
             await performAfterTurnPredictiveCompaction({
               sessionId,
               messages,
