@@ -4457,36 +4457,62 @@ test("commitTurn retries the unconfirmed suffix after a partial daemon acknowled
 });
 
 test("cursor-gap repair persists only confirmed seed messages and leaves failed commits retryable", async () => {
-  for (const confirmation of ["another-gap", "none", "partial"] as const) {
-    const client = new FakeClient();
-    const sessionId = `s1-commit-gap-${confirmation}`;
-    const engine = buildContextEngineFactory(fakeRuntime(client), { userId: "fixed-user" });
-    const messages = [
-      makeMessage("user", "old question", `${confirmation}-u1`),
-      makeMessage("assistant", "old reply", `${confirmation}-a1`),
-      makeMessage("user", "new question", `${confirmation}-u2`),
-      makeMessage("assistant", "new reply", `${confirmation}-a2`),
-    ];
-    client.afterTurnResponses = [{ cursor: { lastProcessedIndex: 1, sessionVersion: 1, manifestTailHash: "old" } }];
-    await engine.afterTurn({ sessionId, messages: messages.slice(0, 2) });
-    await flushIngestion(engine);
+  for (const identity of ["ids", "idless"] as const) {
+    for (const confirmation of ["another-gap", "none", "partial", "partial-before-prompt", "rpc-error"] as const) {
+      const client = new FakeClient();
+      const sessionId = `s1-commit-gap-${confirmation}-${identity}`;
+      const engine = buildContextEngineFactory(fakeRuntime(client), { userId: "fixed-user" });
+      const messagesWithIds = [
+        makeMessage("user", "old question", `${confirmation}-u1`),
+        makeMessage("assistant", "old reply", `${confirmation}-a1`),
+        makeMessage("user", "new question", `${confirmation}-u2`),
+        makeMessage("assistant", "new reply", `${confirmation}-a2`),
+      ];
+      const messages = identity === "ids" ? messagesWithIds : messagesWithIds.map(({ role, content }) => ({ role, content }));
+      client.afterTurnResponses = [{ cursor: { lastProcessedIndex: 1, sessionVersion: 1, manifestTailHash: "old" } }];
+      await engine.afterTurn({ sessionId, messages: messages.slice(0, 2) });
+      await flushIngestion(engine);
 
-    client.afterTurnResponses = [
-      { cursor: { lastProcessedIndex: 0, sessionVersion: 1, manifestTailHash: "" } },
-      { cursor: {
-        lastProcessedIndex: confirmation === "partial" ? 1 : -1,
-        sessionVersion: 1,
-        manifestTailHash: confirmation === "another-gap" ? "" : "confirmed-tail",
-      } },
-    ];
-    const args = { advancementKey: `adv-gap-${confirmation}`, sessionId, messages, prePromptMessageCount: 2 };
-    await assert.rejects(engine.commitTurn(args), /Daemon confirmed (?:no|only 2 of 4) messages/);
-    assert.equal(manifestStore.load(sessionId).turns.length, confirmation === "partial" ? 2 : 0);
+      client.afterTurnResponses = [
+        { cursor: { lastProcessedIndex: 0, sessionVersion: 1, manifestTailHash: "" } },
+        { cursor: {
+          lastProcessedIndex: confirmation === "partial" ? 1 : confirmation === "partial-before-prompt" ? 0 : -1,
+          sessionVersion: 1,
+          manifestTailHash: confirmation === "another-gap" ? "" : "confirmed-tail",
+        } },
+      ];
+      if (confirmation === "rpc-error") {
+        const original = client.afterTurnKernel.bind(client);
+        let calls = 0;
+        client.afterTurnKernel = async (params) => {
+          calls += 1;
+          if (calls === 2) {
+            client.afterTurnResponses.length = 0;
+            throw new Error("reseed RPC unavailable");
+          }
+          return original(params);
+        };
+      }
+      const args = { advancementKey: `adv-gap-${confirmation}-${identity}`, sessionId, messages, prePromptMessageCount: 2 };
+      await assert.rejects(engine.commitTurn(args), /Daemon confirmed (?:no|only [12] of 4) messages|reseed RPC unavailable/);
+      const confirmedCount = confirmation === "partial" ? 2 : confirmation === "partial-before-prompt" ? 1 : 0;
+      assert.equal(manifestStore.load(sessionId).turns.length, confirmedCount);
+      assert.equal(manifestStore.load(sessionId).recoveryPending, true);
 
-    // The same logical turn must be allowed to finish after the daemon recovers.
-    client.afterTurnResponse = { cursor: { lastProcessedIndex: 3, sessionVersion: 2, manifestTailHash: "recovered" } };
-    assert.equal((await engine.commitTurn(args)).status, "committed");
-    assert.equal((await engine.commitTurn(args)).status, "duplicate");
+      // A replacement engine must recover the unconfirmed historical suffix
+      // from persisted state, including messages before prePromptMessageCount.
+      const replacement = buildContextEngineFactory(fakeRuntime(client), { userId: "fixed-user" });
+      client.afterTurnResponse = { cursor: { lastProcessedIndex: 3, sessionVersion: 2, manifestTailHash: "recovered" } };
+      assert.equal((await replacement.commitTurn(args)).status, "committed");
+      const retried = client.calls.filter((call) => call.method === "afterTurnKernel").at(-1)!;
+      const outgoing = retried.params.messages as Array<{ role: string; content: string; id?: string }>;
+      assert.deepEqual(outgoing.map(({ role, content }) => ({ role, content })), messages.slice(confirmedCount).map(({ role, content }) => ({ role, content })));
+      if (identity === "ids") assert.deepEqual(outgoing, messages.slice(confirmedCount));
+      assert.equal(manifestStore.load(sessionId).turns.length, messages.length);
+      assert.deepEqual(manifestStore.load(sessionId).turns.map((turn) => turn.contentHash), messages.map((message) => manifestStore.hashString(message.content)));
+      assert.equal(manifestStore.load(sessionId).recoveryPending, undefined);
+      assert.equal((await replacement.commitTurn(args)).status, "duplicate");
+    }
   }
 });
 

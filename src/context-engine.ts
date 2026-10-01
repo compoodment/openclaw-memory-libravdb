@@ -2022,7 +2022,11 @@ function persistAcknowledgedBatch(
       `(lastProcessedIndex=${cursor?.lastProcessedIndex}, batch started at ${startIndex}).`,
     );
   }
-  manifestStore.save(manifestStore.appendACKedMessages(manifest, ackedMessages, startIndex));
+  const updated = manifestStore.appendACKedMessages(manifest, ackedMessages, startIndex);
+  if (manifest.recoveryPending && ackedMessages.length < messages.length) {
+    updated.recoveryPending = true;
+  }
+  manifestStore.save(updated);
   if (ackedMessages.length < messages.length) {
     throw new Error(
       `[LibraVDB] Daemon confirmed only ${ackedMessages.length} of ${messages.length} messages ` +
@@ -3840,12 +3844,33 @@ export function buildContextEngineFactory(
         sessionKey: args.sessionKey,
       });
 
-      const afterTurnMessages = selectAfterTurnMessages(args.messages, args.prePromptMessageCount, logger);
-      const messages = normalizeKernelMessages(afterTurnMessages, { retainOpenClawContext: true });
+      const preflightManifest = manifestStore.load(sessionId, logger);
+      const selectMessages = (recoveryPending: boolean): KernelCompatibleMessage[] => {
+        const source = recoveryPending
+          ? args.messages
+          : selectAfterTurnMessages(args.messages, args.prePromptMessageCount, logger);
+        // The same outbox retry carries the same source transcript. Stable
+        // recovery IDs preserve a single-message ACK prefix even when the
+        // host omitted IDs; ordinary turns keep their existing ID policy.
+        const recoverySource = recoveryPending ? source.map((message, index) => {
+          if (typeof message.id === "string" && message.id.length > 0) return message;
+          const hash = createHash("sha256").update(JSON.stringify([
+            sessionId,
+            index,
+            message.role,
+            normalizeKernelContent(message.content, { retainOpenClawContext: true }),
+          ])).digest("hex");
+          return { ...message, id: `libravdb-recovery:${hash}` };
+        }) : source;
+        const normalized = normalizeKernelMessages(recoverySource, { retainOpenClawContext: true });
+        return recoveryPending
+          ? boundAfterTurnMessagesForIngest(normalized, logger, sessionId)
+          : normalized;
+      };
+      const messages = selectMessages(preflightManifest.recoveryPending === true);
 
       // Sync preflight: return skipped immediately when no new messages exist,
       // preserving the original afterTurn completion contract for idempotency.
-      const preflightManifest = manifestStore.load(sessionId, logger);
       const preflightOverlap = manifestStore.findOverlapIndex(preflightManifest, messages);
       const preflightNewCount = messages.slice(preflightOverlap).length;
 
@@ -3871,8 +3896,9 @@ export function buildContextEngineFactory(
           // Reload manifest inside the serialized queue so state is fresh
           // after any preceding queued tasks have completed.
           const manifest = manifestStore.load(sessionId, logger);
-          const overlapIndex = manifestStore.findOverlapIndex(manifest, messages);
-          const newMessages = messages.slice(overlapIndex);
+          const queuedMessages = manifest.recoveryPending ? selectMessages(true) : messages;
+          const overlapIndex = manifestStore.findOverlapIndex(manifest, queuedMessages);
+          const newMessages = queuedMessages.slice(overlapIndex);
 
           if (newMessages.length === 0) {
             return; // already handled by a preceding queued task
@@ -3925,12 +3951,9 @@ export function buildContextEngineFactory(
               `[LibraVDB] Daemon reported cursor gap for session ${sessionId}. ` +
               `Resetting manifest and re-seeding from source history.`,
             );
-            const seedMessages = boundAfterTurnMessagesForIngest(
-              normalizeKernelMessages(args.messages, { retainOpenClawContext: true }),
-              logger,
-              sessionId,
-            );
+            const seedMessages = selectMessages(true);
             const emptyManifest = manifestStore.createEmpty(sessionId);
+            emptyManifest.recoveryPending = true;
             // The daemon has disproved the old manifest. Clear it even if the
             // recovery RPC fails, so a subsequent retry cannot skip lost data.
             manifestStore.save(emptyManifest);
