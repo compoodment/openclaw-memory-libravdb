@@ -3856,7 +3856,9 @@ export function buildContextEngineFactory(
         // The same advancement retry carries the same source transcript.
         // Preserve single-message ACK prefixes even when the host omitted IDs.
         // Legacy afterTurn calls without advancement keys keep their ID policy.
-        const identityScope = recoveryPending ? `recovery:${sessionId}` : args[ADVANCEMENT_IDENTITY];
+        const identityScope = recoveryPending
+          ? `recovery:${sessionId}`
+          : args[ADVANCEMENT_IDENTITY] ? `advancement:${args[ADVANCEMENT_IDENTITY]}` : undefined;
         const identifiedSource = identityScope ? source.map((message, index) => {
           if (typeof message.id === "string" && message.id.length > 0) return message;
           const hash = createHash("sha256").update(JSON.stringify([
