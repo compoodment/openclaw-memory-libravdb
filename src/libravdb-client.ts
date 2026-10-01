@@ -1,7 +1,7 @@
 import { createPromiseClient } from "@connectrpc/connect";
 import type { CallOptions, Interceptor } from "@connectrpc/connect";
 import type { PartialMessage } from "@bufbuild/protobuf";
-import { createGrpcTransport } from "@connectrpc/connect-node";
+import { createGrpcTransport, Http2SessionManager } from "@connectrpc/connect-node";
 import { LibravDB } from "@xdarkicex/libravdb-contracts/client";
 import { createHmac } from "node:crypto";
 import fs from "node:fs";
@@ -245,6 +245,7 @@ export function createAuthInterceptor(
 
 export class LibravDBClient {
   private client: PromiseClient;
+  private readonly sessionManager: Http2SessionManager;
   private readonly secret: string | undefined;
   private readonly endpoint: string;
   private readonly legacyProbeTimeoutMs: number;
@@ -300,18 +301,24 @@ export class LibravDBClient {
       return next(req);
     });
     interceptors.push(authInterceptor);
+    interceptors.push((next) => async (req) => {
+      self.guardOpen();
+      return next(req);
+    });
 
-    const transport = createGrpcTransport({
-      baseUrl: targetUrl,
-      httpVersion: "2",
-      nodeOptions: isUnix
+    this.sessionManager = new Http2SessionManager(targetUrl, undefined,
+      isUnix
         ? { createConnection: () => net.connect(socketPath!) } as any
         : {
             ...(rootCerts ? { ca: rootCerts } : {}),
             ...(clientKey ? { key: clientKey } : {}),
             ...(clientCert ? { cert: clientCert } : {}),
             ...(isInsecure ? { rejectUnauthorized: false } : {}),
-          },
+          });
+    const transport = createGrpcTransport({
+      baseUrl: targetUrl,
+      httpVersion: "2",
+      sessionManager: this.sessionManager,
       defaultTimeoutMs: options.timeoutMs ?? 30000,
       interceptors,
     });
@@ -589,6 +596,7 @@ export class LibravDBClient {
 
   close(): void {
     this.closed = true;
+    this.sessionManager.abort();
   }
 }
 
