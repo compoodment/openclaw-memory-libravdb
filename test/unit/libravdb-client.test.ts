@@ -474,3 +474,19 @@ test("cross-tenant search treats a successful empty read as an empty search", as
   client.setReadTenants(["failed", "empty"]);
   assert.deepEqual((await client.searchTextCollections({ text: "memory", k: 5 })).results, []);
 });
+
+test("cross-tenant search ranks globally and applies k after merging", async () => {
+  const client = new LibravDBClient({ endpoint: "tcp:127.0.0.1:9" });
+  (client as any).client = {
+    searchTextCollections: async () => ({
+      results: (client as any).tenantKey === "tenant-a"
+        ? [{ id: "a1", score: 0.6 }, { id: "a2", score: 0.5 }]
+        : [{ id: "b1", score: 0.9 }, { id: "b2", score: 0.8 }],
+    }),
+  };
+  client.setTenantKey("primary");
+  client.setReadTenants(["tenant-a", "tenant-b"]);
+  const result = await client.searchTextCollections({ text: "memory", k: 2 });
+  assert.deepEqual(result.results.map((item) => item.id), ["b1", "b2"]);
+  assert.equal((client as any).tenantKey, "primary");
+});

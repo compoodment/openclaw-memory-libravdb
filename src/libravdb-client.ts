@@ -476,7 +476,9 @@ export class LibravDBClient {
     if (!succeeded) {
       throw firstError;
     }
-    return { results: allResults } as SearchTextResponse;
+    allResults.sort((left, right) => right.score - left.score);
+    const results = req.k && req.k > 0 ? allResults.slice(0, req.k) : allResults;
+    return { results } as SearchTextResponse;
   }
 
   async listCollection(req: PartialMessage<ListCollectionRequest>): Promise<ListCollectionResponse> {
