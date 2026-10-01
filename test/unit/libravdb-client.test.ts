@@ -378,6 +378,69 @@ test("auth mutex releases when an in-flight rpc is aborted", async () => {
   assert.equal(st.nonceHex, "after");
 });
 
+test("aborted auth requests reject while queued and release their abandoned lock slot", async () => {
+  const st = state({ nonceHex: "active" });
+  const int = createAuthInterceptor(st);
+  const controller = new AbortController();
+  let finishFirst!: () => void;
+  let firstStarted!: () => void;
+  const gate = new Promise<void>((resolve) => { finishFirst = resolve; });
+  const started = new Promise<void>((resolve) => { firstStarted = resolve; });
+  const response = {
+    header: { get: (name: string) => name === "x-libravdb-nonce" ? "after" : null },
+    trailer: { get: () => null },
+  };
+  const request = { method: { name: "Status" }, header: { set: () => {} } };
+  const first = (int as any)(async () => {
+    firstStarted();
+    await gate;
+    return response;
+  })(request);
+  await started;
+  let canceledEnteredTransport = false;
+  const canceled = (int as any)(async () => {
+    canceledEnteredTransport = true;
+    return response;
+  })({ ...request, signal: controller.signal });
+  const reason = new Error("canceled while waiting");
+  let rejected = false;
+  const canceledRejected = assert.rejects(canceled, (error) => error === reason).then(() => { rejected = true; });
+  controller.abort(reason);
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(rejected, true, "cancellation must not wait for an unrelated in-flight RPC");
+  } finally {
+    finishFirst();
+    await Promise.all([first, canceledRejected]);
+  }
+  assert.equal(canceledEnteredTransport, false);
+  await (int as any)(async () => response)(request);
+  assert.equal(st.nonceHex, "after");
+});
+
+test("auth recovery receives the canceled request's signal", async () => {
+  const controller = new AbortController();
+  let bootstrapStarted!: () => void;
+  const started = new Promise<void>((resolve) => { bootstrapStarted = resolve; });
+  const st = state({
+    bootstrap: async (signal) => {
+      bootstrapStarted();
+      assert.equal(signal, controller.signal);
+      await new Promise<void>((_resolve, reject) => {
+        signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
+      });
+    },
+  });
+  const reason = new Error("canceled during recovery");
+  const request = (createAuthInterceptor(st) as any)(async () => {
+    throw new Error("transport must not run after canceled recovery");
+  })({ method: { name: "Status" }, header: { set: () => {} }, signal: controller.signal });
+  const rejected = assert.rejects(request, (error) => error === reason);
+  await started;
+  controller.abort(reason);
+  await rejected;
+});
+
 test("auth skipped for Health", async () => {
   const st = state({ nonceHex: "keep" });
   const int = createAuthInterceptor(st);

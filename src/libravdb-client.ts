@@ -186,8 +186,33 @@ function createRpcMutex(): RpcMutex {
 export interface AuthInterceptorState {
   readonly secret: string | undefined;
   nonceHex: string | undefined;
-  bootstrap(): Promise<void>;
+  bootstrap(signal?: AbortSignal): Promise<void>;
   readonly rpcMutex: RpcMutex;
+}
+
+async function acquireRpcLock(mutex: RpcMutex, signal?: AbortSignal): Promise<() => void> {
+  signal?.throwIfAborted();
+  const pending = mutex.lock();
+  if (!signal) return pending;
+
+  return await new Promise<() => void>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    pending.then((release) => {
+      signal.removeEventListener("abort", onAbort);
+      if (signal.aborted) {
+        // Preserve the nonce queue's ordering, but release this abandoned
+        // slot as soon as the preceding call has finished.
+        release();
+        return;
+      }
+      resolve(release);
+    }, (error) => {
+      signal.removeEventListener("abort", onAbort);
+      reject(error);
+    });
+    if (signal.aborted) onAbort();
+  });
 }
 
 export function createAuthInterceptor(
@@ -200,12 +225,13 @@ export function createAuthInterceptor(
       return next(req);
     }
 
-    const release = await state.rpcMutex.lock();
+    const release = await acquireRpcLock(state.rpcMutex, req.signal);
     try {
+      req.signal?.throwIfAborted();
       // Lost the nonce? Recover inside the lock so queued requests
       // wait for the chain to be restored instead of failing spuriously.
       if (state.secret && !state.nonceHex) {
-        await state.bootstrap();
+        await state.bootstrap(req.signal);
         if (!state.nonceHex) {
           throw new Error("LibraVDB: bootstrap handshake did not return a nonce");
         }
@@ -287,7 +313,7 @@ export class LibravDBClient {
       secret: this.secret,
       get nonceHex() { return self.nonceHex; },
       set nonceHex(v: string | undefined) { self.nonceHex = v; },
-      bootstrap: () => self.bootstrapHandshake(),
+      bootstrap: (signal) => self.bootstrapHandshake({ signal }),
       rpcMutex,
     });
 
@@ -326,12 +352,13 @@ export class LibravDBClient {
     this.client = createPromiseClient(LibravDB, transport);
   }
 
-  async bootstrapHandshake(): Promise<void> {
+  async bootstrapHandshake(opts?: Pick<CallOptions, "signal" | "timeoutMs">): Promise<void> {
     this.guardOpen();
     try {
       await this.client.health(
         { service: "" },
         {
+          ...opts,
           onHeader: (headers) => {
             const nonce = headers.get("x-libravdb-nonce");
             if (nonce) this.nonceHex = nonce;
