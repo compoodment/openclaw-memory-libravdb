@@ -434,3 +434,43 @@ test("cross-tenant search keeps same record ids from different tenants", async (
   );
   assert.equal((client as any).tenantKey, "primary");
 });
+
+test("cross-tenant search rejects when every tenant read fails", async () => {
+  const client = new LibravDBClient({ endpoint: "tcp:127.0.0.1:9" });
+  const unavailable = new Error("daemon unavailable");
+  (client as any).client = {
+    searchTextCollections: async () => { throw unavailable; },
+  };
+  client.setTenantKey("primary");
+  client.setReadTenants(["tenant-a", "tenant-b"]);
+  await assert.rejects(client.searchTextCollections({ text: "memory", k: 5 }),
+    (error) => error === unavailable);
+  assert.equal((client as any).tenantKey, "primary");
+});
+
+test("cross-tenant search preserves successful reads when another tenant fails", async () => {
+  const client = new LibravDBClient({ endpoint: "tcp:127.0.0.1:9" });
+  (client as any).client = {
+    searchTextCollections: async () => {
+      if ((client as any).tenantKey === "failed") throw new Error("permission denied");
+      return { results: [{ id: "hit", text: "available", score: 0.9 }] };
+    },
+  };
+  client.setTenantKey("primary");
+  client.setReadTenants(["failed", "available"]);
+  const result = await client.searchTextCollections({ text: "memory", k: 5 });
+  assert.deepEqual(result.results.map((item) => item.id), ["hit"]);
+  assert.equal((client as any).tenantKey, "primary");
+});
+
+test("cross-tenant search treats a successful empty read as an empty search", async () => {
+  const client = new LibravDBClient({ endpoint: "tcp:127.0.0.1:9" });
+  (client as any).client = {
+    searchTextCollections: async () => {
+      if ((client as any).tenantKey === "failed") throw new Error("permission denied");
+      return { results: [] };
+    },
+  };
+  client.setReadTenants(["failed", "empty"]);
+  assert.deepEqual((await client.searchTextCollections({ text: "memory", k: 5 })).results, []);
+});

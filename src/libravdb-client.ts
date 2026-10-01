@@ -451,11 +451,14 @@ export class LibravDBClient {
     const savedKey = this.tenantKey;
     const allResults: SearchTextResponse["results"] = [];
     const seen = new Set<string>();
+    let succeeded = false;
+    let firstError: unknown;
     try {
       for (const t of this.readTenants) {
         this.tenantKey = t;
         try {
           const resp = await this.client.searchTextCollections(req);
+          succeeded = true;
           for (const r of resp.results ?? []) {
             const dedupeKey = `${t}\0${r.id}`;
             if (!seen.has(dedupeKey)) {
@@ -463,10 +466,15 @@ export class LibravDBClient {
               allResults.push(r);
             }
           }
-        } catch { /* skip failed tenant reads */ }
+        } catch (error) {
+          firstError ??= error;
+        }
       }
     } finally {
       this.tenantKey = savedKey;
+    }
+    if (!succeeded) {
+      throw firstError;
     }
     return { results: allResults } as SearchTextResponse;
   }
