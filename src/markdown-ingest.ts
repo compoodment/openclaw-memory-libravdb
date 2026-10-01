@@ -8,6 +8,7 @@ import type { MarkdownSourceMeta as ProtoSourceMeta } from "@xdarkicex/libravdb-
 import type { LoggerLike, PluginConfig } from "./types.js";
 import { formatError } from "./format-error.js";
 import { IngestQueue } from "./ingest-queue.js";
+import { createMarkdownFenceTracker } from "./markdown-fence.js";
 import type { ClientGetter } from "./plugin-runtime.js";
 
 const DEFAULT_DEBOUNCE_MS = 150;
@@ -1477,15 +1478,11 @@ function findFrontmatterEnd(text: string, offset: number): { position: number; b
 }
 
 function hasInlineObsidianTag(text: string): boolean {
-  let inFence = false;
+  const isFencedLine = createMarkdownFenceTracker();
   const lines = text.split("\n");
   for (const line of lines) {
     const trimmed = line.trimStart();
-    if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) {
+    if (isFencedLine(line)) {
       continue;
     }
     const searchable = trimmed.replace(/^#{1,6}\s+/, "");
