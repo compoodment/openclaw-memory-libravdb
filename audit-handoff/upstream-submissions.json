@@ -1,0 +1,535 @@
+{
+  "target_repository": "xDarkicex/openclaw-memory-libravdb",
+  "status": "upstream submissions not created by this cloud audit; ready for refreshed duplicate and branch checks",
+  "prepared_date_utc": "2026-10-01",
+  "verified_base": "c3570e1f30f1db43be5434a5ca57f936e198a3e3",
+  "source_thread_id": "01a0f5c0-adc7-7486-9aff-aaf1f3e91069",
+  "source_host_id": "durable",
+  "recovery_note": "The cloud executor became unavailable and the ZIP was not downloadable. The 29 PR drafts and branch SHAs were recovered from closed fork PR metadata; issue candidate titles and the issue-only report were retained by the auditing agents. This is a replacement handoff, not the original ZIP. Original raw logs and reports are not embedded.",
+  "head_repository": "compoodment/openclaw-memory-libravdb",
+  "submissions": [
+    {
+      "slug": "plaintext-mtls-paths",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-plaintext-mtls-paths",
+      "head_sha": "7dab1de2f184aa58b2c37f4613c943495b12192c",
+      "title": "fix: ignore unused mTLS files on plaintext endpoints",
+      "body": "Plaintext endpoints currently load configured mTLS certificate files and fail startup if those unused files are missing. Load client certificate/key files only when TLS is active, matching the existing CA handling and runtime warning.\n\nValidation: the plaintext regression fails against upstream `c3570e1`; all 24 focused client tests pass with the fix. Coverage includes Unix, default loopback TCP, explicitly insecure remote TCP, and forced TLS requiring readable certificates. TypeScript test compilation passes.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/1"
+    },
+    {
+      "slug": "unauthenticated-concurrency",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-unauthenticated-concurrency",
+      "head_sha": "d4e9c41a8b53a25162ba6e3db295a0c2f612072c",
+      "title": "fix: allow concurrent RPCs without an authentication secret",
+      "body": "The auth interceptor serializes every non-health RPC even when authentication is disabled. A slow background AfterTurnKernel call then blocks an unrelated BeforeTurnKernel or search request before it reaches transport.\n\nBypass nonce serialization when there is no secret; preserve the authenticated nonce chain. A deferred-RPC regression fails on upstream and passes with the fix. The focused client suite passed 25/25, including authenticated serialization, recovery and cancellation.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/2"
+    },
+    {
+      "slug": "cross-tenant-search",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-cross-tenant-search",
+      "head_sha": "d1ba36b750cb0c195c0c522e950ad558783671b4",
+      "title": "fix: preserve errors, ranking and limits in cross-tenant search",
+      "body": "When all tenant searches fail, fan-out currently returns a successful empty result. It also concatenates results in tenant order and applies `k` per tenant, so `k: 2` can return four records while lower scores precede higher ones.\n\nReject with the original error when every tenant read fails, retain partial success and successful empty responses, then rank the merged results by score and apply the requested global limit. Tenant-key restoration remains in `finally`.\n\nValidation: deterministic regressions fail on upstream for total failure and ordering/limit; the focused client suite passes 29/29 after both fixes. TypeScript test compilation and diff checks pass. The existing routing race in upstream #369 is separate.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/3"
+    },
+    {
+      "slug": "graph-expansion-budgets",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-graph-expansion-budgets",
+      "head_sha": "49a4f9c453cd5153eebacba5fe41b12819def06c",
+      "title": "fix: causal graph expansion bypasses token and subagent budgets",
+      "body": "## Reproduction\n\nAt upstream `c3570e1` (v1.10.25), execute `memory_expand({ record_id: \"record-1\", maxTokens: 100 })` against a daemon response containing a 2,000-character connected record. The tool returns the entire record with `exceededBudget: false`. After preparing a child session with `subagentTokenBudget: 100`, two graph expansions both reach the daemon; graph mode never consumes the budget. A summary containing exactly 400 characters also returns its extra header despite a 100-token budget.\n\n## Expected behavior\n\nGraph and summary recall should honor the same maxTokens cap and the child session budget. The tool should omit oversized connected data and return an exhausted-budget response before sending another RPC.\n\n## Fix and validation\n\nMove the subagent budget gate before the graph/summary branch, clamp requests to the tool maximum, bound graph output, and count summary headers. Three deterministic regression tests failed on upstream and pass with the patch. All 10 memory-recall unit tests passed at this commit. Duplicate searches for graph expansion and memory_expand budget found no matching issue/PR.\n\nThis uses the existing approximate 4-characters/token accounting; it does not introduce a tokenizer.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/4"
+    },
+    {
+      "slug": "search-loop-guard",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-search-loop-guard",
+      "head_sha": "9c8052941388c7b07c033aa4ccc93874578af9ec",
+      "title": "fix: memory search loop guard blocks changed filters and retries after failures",
+      "body": "## Reproduction\n\nAt upstream `c3570e1` (v1.10.25), use the same session and query to search `corpus: \"all\"`, then `corpus: \"sessions\"` or `\"memory\"`. The second request is blocked as a duplicate even though it addresses a different corpus. Changing kind, signals, maxResults, or minScore has the same problem. Two queries with the same first 80 characters collide. If a daemon RPC fails once, an immediate retry is also blocked for 60 seconds despite there being no previous results.\n\n## Expected behavior\n\nOnly equivalent successful or in-flight requests should trigger the loop guard. Changed retrieval parameters and failed requests should remain callable.\n\n## Fix and validation\n\nUse the entire normalized query plus normalized search parameters and full manager context for the guard key. Release reservations after failure and reject unsupported wiki requests before reserving a key. Two regression tests failed on upstream; all 8 memory-tools tests pass with the patch. Duplicate searches for duplicate search, dedup, filters, and loop guard found no existing matching report.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/5"
+    },
+    {
+      "slug": "cross-session-recall",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-cross-session-recall",
+      "head_sha": "7161970d76f7c865754157d354100f4bea662394",
+      "title": "fix: explicit memory corpus bypasses crossSessionRecall=false",
+      "body": "## Reproduction\n\nConfigure `crossSessionRecall: false`, then call the runtime manager or `libravdb_memory_search` with `corpus: \"memory\"`. At upstream `c3570e1` (v1.10.25), this sends a multi-collection search to `user:<userId>` and `global`, returning cross-session durable memory. It occurs both with and without an active session.\n\n## Expected behavior\n\nREADME.md and docs/configuration.md specify that when crossSessionRecall is false only session-scoped memories are retrieved. An explicit corpus filter should not bypass that setting; requesting memory-only recall should return no results.\n\n## Fix and validation\n\nApply the configuration gate before selecting durable collections. Keep all/session corpus behavior session-scoped and return no collections for memory-only corpus while disabled. The new regression failed on upstream. All 21 memory-runtime unit tests pass with the patch. Searches for crossSessionRecall corpus and cross-session corpus found no matching issue/PR.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/6"
+    },
+    {
+      "slug": "grep-result-limit",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-grep-result-limit",
+      "head_sha": "9a3fa4abcd0345d82f9acf0b3f29aa4016b2d980",
+      "title": "fix: memory_grep exceeds its result limit and hides truncation",
+      "body": "## Reproduction\n\nAt upstream `c3570e1` (v1.10.25), call `memory_grep({ pattern: \"needle\", scope: \"both\", limit: 1 })` when one matching summary and one matching turn exist. The result contains two hits, reports totalMatches 2, and reports truncated false. With scope summaries and two matches, limit 1 still reports truncated false after omitting the second match.\n\n## Expected behavior\n\nThe documented maximum result count should apply across both collections, and omitted matching candidates should set truncated true.\n\n## Fix and validation\n\nUse one shared result count for both corpora, cap the requested limit to the schema maximum, and track omitted matches. Both regression tests failed on upstream; all 12 memory-recall tests pass with the patch. Duplicate searches for memory_grep limit and memory_grep found only the distinct existing regex/event-loop issue #317.\n\nThis patch preserves the existing semantic-candidate search design; it does not claim to make grep exhaustive over every stored record.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/7"
+    },
+    {
+      "slug": "empty-markdown",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-empty-markdown",
+      "head_sha": "1b2c4226711b7db277146370d82f9c5b0d984ef9",
+      "title": "fix: retire stale Markdown content and exclude fenced examples",
+      "body": "On main c3570e1, IngestQueue.enqueueIngest only sends chunks while offset < text.length. An empty file sends no RPC, returns success, and the directory adapter saves the new empty-file hash/size. The daemon retains the old document while subsequent scans and restarts treat the empty file as synchronized.\n\nReproduction: ingest notes.md containing a fact, truncate it to zero bytes, then refresh. No delete/replace RPC is sent and the old fact remains in the fake daemon document map. Another refresh skips the file via the new snapshot.\n\nExpected: the empty replacement retires the authored document before updating the local snapshot. The proposed fix uses the existing deletion retry path for empty ingestion and covers both normal and Infinity chunking modes, delete failures, and an integration truncation/snapshot regression.\n\nThe dream candidate parser and Obsidian inline-tag detector toggle a Boolean for any line beginning with ``` or ~~~. They do not retain the opening marker character/length or require a closing fence to have no info text. A four-backtick fence containing a literal triple-backtick example, mismatched fence markers, or ```not-a-close therefore exposes code as ordinary content.\n\nDream reproduction: under ## Deep Sleep, open a ````markdown fence, include a ``` line, then a bullet '- Example {score=0.9 recall=3 unique=2}', then close with ````. The code example is parsed as a promotion candidate. The equivalent fenced #project example causes an otherwise untagged Obsidian note to be ingested.\n\nThe dream parser also ignores # headings as section boundaries, so a bullet after '# Examples' inherits the previous Deep Sleep section. Valid headings with optional trailing # markers or CRLF are missed.\n\nExpected: fenced examples stay excluded, and ATX headings delimit the active section. The proposed shared fence tracker matches closing marker character/length and trailing whitespace; heading parsing handles levels 1-6, closing hashes, empty headings, and CRLF. Regression tests cover all these cases.\n\nBump the ingestion snapshot version from 3 to 4 so existing snapshots are revalidated once. Migration regressions reproduce previously poisoned empty-file and fenced-tag snapshots and verify stale authored content is deleted. These behavior changes are kept together because they share the migration.\n\nValidation: independent branch TypeScript compilation and dream-promotion, queue, and Markdown integration suites pass. The migration regressions fail with the old version and pass with version 4. The separate fence-handling proposal is consolidated into this change.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/8"
+    },
+    {
+      "slug": "turn-cache-isolation",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-turn-cache-isolation",
+      "head_sha": "ae4f994d6cbd04b128a5a1c7209cb304a30d8dd3",
+      "title": "fix: isolate turn cache keys and session invalidation",
+      "body": "The turn cache concatenates session ID and query with a colon. Session `a:b` with query `c` and session `a` with query `b:c` share a cache key; invalidating session `a` also invalidates session `a:b`.\n\nEncode the session component with JSON before adding the separator, and use the same encoding for invalidation. Regression coverage checks collisions, exact-session invalidation, and escaped session IDs; all 13 cache tests pass.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/9"
+    },
+    {
+      "slug": "helm-ephemeral-storage",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-helm-ephemeral-storage",
+      "head_sha": "038bb7864c1936881fc40bf1615818a6f6b9d349",
+      "title": "fix: honor Helm persistence and listener port settings",
+      "body": "On current main c3570e1, `helm template audit deploy/helm/libravdbd --set persistence.enabled=false` omits PersistentVolumeClaim resources but still renders a Deployment volume with `persistentVolumeClaim.claimName: audit-data`. Installing that supported values override leaves the pod waiting for a missing claim. The Deployment should use ephemeral storage when persistence is disabled.\n\nReproduced with Helm 3.16.4. The fix uses emptyDir for the data volume when disabled and retains the matching data claim with default persistence. Two render regressions passed and Helm lint passed.\n\nOn current main c3570e1, `helm template audit deploy/helm/libravdbd --set service.port=6000` sets both the exposed Service port and the Deployment's named grpc containerPort to 6000, while the daemon ConfigMap still specifies grpc_endpoint: tcp:0.0.0.0:50051. Since the Service uses targetPort: grpc, traffic is forwarded to 6000 and cannot reach the daemon. Changing config.grpcEndpoint alone has the inverse mismatch.\n\nThe fix derives the named containerPort from the daemon's configured TCP endpoint and leaves service.port as the exposed Service port. Render regressions check both override directions and reject unsupported/invalid listener endpoints. Four Helm render tests pass and Helm lint with a non-default exposed port passes. No Kubernetes cluster was used.\n\nValidation: four actual Helm render tests and lint pass with persistence disabled and a non-default exposed port. TypeScript compilation passes. No live Kubernetes deployment performed.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/10"
+    },
+    {
+      "slug": "vm-writable-storage",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-vm-writable-storage",
+      "head_sha": "4c1cedc1c217c22fabc41baf2fcb431ed1492b09",
+      "title": "fix: preserve writable daemon storage in VM bootstrap",
+      "body": "The VM cloud-init creates root-owned 0755 data/model directories and bind-mounts them into the image, whose daemon runs as UID 1000. Database/model writes fail with Permission denied.\n\nUse Docker named volumes so first-use population inherits the image directories' non-root ownership. Validation: reproduced failed writes to the original mounts as UID 1000, then verified successful data/model writes using named volumes with a matching image ownership fixture. The extracted shell bootstrap passes `bash -n`. No AWS apply was performed.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/11"
+    },
+    {
+      "slug": "assembly-deadline",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-assembly-deadline",
+      "head_sha": "a93886811b89c8aa5acc080c8ca238708a681bca",
+      "title": "fix: cancel timed-out context assembly and release deadline timers",
+      "body": "Every AssembleContextInternal call leaves its timeout timer alive after success or failure. A local assembly deadline also returns fallback without canceling the RPC, allowing work to continue and retain the authenticated request mutex.\n\nClear the timer in `finally`, abort transport when the local deadline fires, and forward CallOptions through the client method. Two regressions fail against upstream (timer retained and missing abort signal) and pass with the fix. Type checking and all 114 context unit tests pass.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/12"
+    },
+    {
+      "slug": "disable-predictive-compaction",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-disable-predictive-compaction",
+      "head_sha": "a45fb387ca7cb678177ae905dfac691363734666",
+      "title": "fix: honor zero predictive compaction budget and explicit threshold precedence",
+      "body": "With compactSessionTokenBudget: 0 and no positive explicit compactThreshold, the plugin currently derives a fallback threshold and still forces predictive compaction during assemble and afterTurn. Honor the zero disable setting for those implicit triggers, while preserving the existing contract that a positive explicit compactThreshold overrides it.\n\nExplicit host/manual compaction remains available. Regression coverage verifies both implicit paths remain disabled, positive explicit threshold still compacts, and manual compaction still works. All 55 existing integration tests pass with the original explicit-override assertion intact; 121 context unit tests pass and TypeScript compilation passes.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/13"
+    },
+    {
+      "slug": "container-startup-docs",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-container-startup-docs",
+      "head_sha": "741e8748d4d49e8adfc382b90c1660268841c657",
+      "title": "docs: fix the container daemon startup wrapper",
+      "body": "The documented `sh` wrapper checks `-S` on a `unix:` endpoint string, uses a Bash brace loop, and invokes the plugin bundle as if it were the OpenClaw gateway CLI. It can continue before the daemon socket exists and never launch the intended gateway.\n\nUse a POSIX polling loop on the actual socket path, detect daemon exit and timeout, and execute the installed OpenClaw CLI. Document process-supervision and stale-socket limits.\n\nValidation: extracted the exact documentation block and executed it under `/bin/sh` with mocked delayed readiness, early daemon exit, and never-ready timeout cases.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/14"
+    },
+    {
+      "slug": "longmemeval-paths",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-longmemeval-paths",
+      "head_sha": "4174b11cd5b7655609ba83dfe84164dd8a894759",
+      "title": "fix: resolve LongMemEval paths before launching the evaluator",
+      "body": "The scorer validates relative hypothesis/data paths in the caller's directory, then passes them unchanged to Python after switching to the evaluator checkout. Valid files fail with FileNotFoundError; relative evaluator checkouts can also double the path prefix.\n\nResolve all three supplied paths before spawning Python. A real subprocess regression fails against upstream and passes after the fix. It uses a relative evaluator checkout containing a space and verifies dataset access, evaluation log, and metrics placement. TypeScript test compilation passes.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/15"
+    },
+    {
+      "slug": "markdown-backpressure",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-markdown-backpressure",
+      "head_sha": "4133a4d7f0dc5d3739b115135e5bd3e26fd003d3",
+      "title": "fix: resume Markdown ingestion after daemon backpressure",
+      "body": "DirectoryMarkdownSourceAdapter receives walDepth/walCapacity only in ingestion feedback. Once one RPC reports WAL usage above 80%, syncCandidates stops before the next RPC, and later scans never reset those fields. There is no polling path that can refresh them. Even after the daemon drains its WAL, all remaining files remain blocked indefinitely.\n\nReproduction: two Markdown files; first ingest returns acceptMore=true, walDepth=90, walCapacity=100; later responses would return depth=0. The first scan only submits one file, and refreshing still never submits the second because stale WAL feedback blocks that RPC.\n\nAdditionally, scheduleRootScan(root, retryAfterMs) called during a scan only sets dirty=true, discarding the requested delay. Its finally block schedules at the regular debounce interval. With debounce 0, the daemon's retryAfterMs=100 is reduced to an immediate retry; the WAL branch's requested 2000 ms is also discarded.\n\nExpected: preserve requested retry delays and allow one new readiness probe on a fresh scan. Regression tests assert no second ingest during the retry window and successful recovery after one full-WAL response. An existing watcher test now explicitly triggers its fake watcher instead of depending on the buggy immediate retry.\n\nValidation: targeted regressions and TypeScript test compilation pass. Combined audit validation subsequently passed 325 unit and 63 integration tests; those preserved results are recorded separately.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/17"
+    },
+    {
+      "slug": "authored-delete-refusal",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-authored-delete-refusal",
+      "head_sha": "f39b1af04f121bb3236a5070dc185959abc5c66b",
+      "title": "fix: retry rejected authored-document deletes",
+      "body": "DeleteAuthoredDocumentResponse has an ok Boolean, but the Markdown adapter maps the response to undefined and IngestQueue.enqueueDelete retries only thrown errors. A resolved {ok:false} is treated as success: prune/retirement removes local file state and writes the snapshot even though the daemon kept the authored document. Future scans no longer track the removed path, so the stale document can remain permanently searchable.\n\nReproduction: ingest notes.md, remove the file, and return {ok:false} from deleteAuthoredDocument. Refresh removes its snapshot entry after only one attempt while the fake daemon retains the document.\n\nExpected: ok=false fails the delete operation, participates in the bounded retry policy, and prevents local retirement until success. The proposed fix preserves the transport response and rejects unsuccessful deletion responses. Unit tests verify retry and exhausted failure; integration coverage verifies a refusal is retried before local snapshot retirement.\n\nValidation: targeted regressions and TypeScript test compilation pass. Combined audit validation subsequently passed 325 unit and 63 integration tests; those preserved results are recorded separately.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/18"
+    },
+    {
+      "slug": "markdown-preserved-mtime",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-markdown-preserved-mtime",
+      "head_sha": "30de9e2040a11b59b3beafe948cbd05edfb12bcb",
+      "title": "fix: detect Markdown rewrites that preserve modification times",
+      "body": "The scanner already reads ctimeMs, but its unchanged predicate and persistent FileState retain only size and mtimeMs. Backup restore, cp -p, synchronization tools, and explicit utimes can rewrite a file while preserving size and mtime. The scanner then skips the file indefinitely, keeping its former authored text in memory.\n\nReproduction: ingest 'Original fact' with mtime 42, overwrite with equal-length 'Replaced fact', and retain mtime 42 while ctime advances. Refresh performs no ingestion on main and the old fact remains searchable.\n\nExpected: ctime participates in the metadata sentinel before skipping hashing. The proposed fix records ctime in new snapshots and hashes old snapshots lacking it once, preserving backward compatibility. Regression coverage checks live rewrites and migration from a legacy snapshot that omitted ctime.\n\nValidation: targeted regressions and TypeScript test compilation pass. Combined audit validation subsequently passed 325 unit and 63 integration tests; those preserved results are recorded separately.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/19"
+    },
+    {
+      "slug": "disable-hard-rules",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-disable-hard-rules",
+      "head_sha": "811bdfa823d8428e0a89fe62995cbe56437c1276",
+      "title": "fix: disable hard constraint rules when maxRules is zero",
+      "body": "## Reproduction\n\nREADME.md and the plugin manifest promise maxRules=0 disables rules entirely. At upstream c3570e1 (v1.10.25), set maxRules to zero, then invoke set_rule. Creation still succeeds, existing rules remain in the injected hard_constraints block, and scanReply continues blocking matching output. Zero bypasses the eviction condition and makes the store unlimited.\n\n## Fix\n\nReject creation while disabled, omit active-rule listings/context and reply scans, and preserve persisted rules so they can be re-enabled. Reset configuration when initializing another store.\n\n## Validation\n\nThe disabled-rules regression failed on upstream; both new rules tests pass after the fix. Searches for maxRules and rules disabled found no matching issue/PR.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/20"
+    },
+    {
+      "slug": "available-tool-guidance",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-available-tool-guidance",
+      "head_sha": "1070f1c0f47f36f2dc3d84fd4470adcaea87e5a5",
+      "title": "fix: guide recall through available memory tools",
+      "body": "## Reproduction\n\nAt upstream c3570e1 (v1.10.25), call the registered memory prompt builder with availableTools=new Set(). The static header still requires libravdb_memory_search and list_user_cards/get_user_card before answering. With only search and get_user_card available, guidance also mandates update_user_card and hard-constraint tools that are absent. Card-only and summary-recall-only tool surfaces receive no useful dynamic guidance because the builder returns early unless search exists.\n\n## Fix\n\nKeep the static header about automatic ingestion. Generate each tool instruction from availableTools, gate maintenance on update_user_card itself, and allow card/recall guidance without search.\n\n## Validation\n\nBoth new regressions failed on upstream. All 7 memory-provider tests pass after the fix. Searches for availableTools and unavailable prompt found no matching issue/PR.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/21"
+    },
+    {
+      "slug": "flush-refusal",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-flush-refusal",
+      "head_sha": "3c2687d732346f675be36cb931e52b5c5a5b299e",
+      "title": "fix: report daemon-rejected namespace flushes as CLI failures",
+      "body": "## Reproduction\n\nAt upstream c3570e1 (v1.10.25), execute libravdb flush --user-id alice --yes against a daemon returning the defined FlushNamespaceResponse { ok: false }. The command prints Deleted durable memory namespace user:alice and exits zero.\n\n## Expected behavior\n\nA rejected deletion must return a nonzero exit status and must not claim that stored memories were removed.\n\n## Fix and validation\n\nCheck the response boolean before printing success. The regression failed on upstream and all 16 CLI tests pass after the fix, including runtime shutdown after failure. Searches for flush ok found no matching issue/PR. The fix was validated with a deterministic fake daemon response; no actual namespace deletion was performed.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/22"
+    },
+    {
+      "slug": "client-session-lifecycle",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-client-session-lifecycle",
+      "head_sha": "b60e02fbe4a1cdfcd674a0b23c860a4aa8e36914",
+      "title": "fix: close client sessions and cancel queued authenticated requests",
+      "body": "`close()` currently only changes a Boolean, leaving established HTTP/2 sessions alive until the transport's idle timeout. Authenticated requests canceled while queued also keep waiting for the nonce mutex and can enter transport later; recovery Health calls do not inherit the canceled request's signal.\n\nOwn the transport session manager and abort it on close, guard immediately before transport so queued work cannot reconnect, and make nonce-lock waits cancellable while preserving queue order. Forward cancellation into recovery handshakes.\n\nValidation: real local HTTP/2 regressions cover idle-session teardown, idempotent close, closing during Health recovery and queued work. Deferred nonce-queue regressions cover prompt abort, abandoned-slot release, and recovery cancellation. Baseline regressions fail; the independent publication branch passes all 26 client tests and TypeScript compilation. Unauthenticated concurrency is addressed by the separate unauthenticated-concurrency submission.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/23"
+    },
+    {
+      "slug": "shared-session-caches",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-shared-session-caches",
+      "head_sha": "610415bd5f1384e29a9c7d1fc8955ae9b5669476",
+      "title": "fix: preserve shared session caches across engine disposal",
+      "body": "Post-tool recall and automated-trigger caches are shared between engine instances, but disposing one engine currently clears both maps for every session. Another active session loses its cached tool continuation and cron/heartbeat retrieval gate. Also, an unspecified new trigger leaves an earlier cron marker behind.\n\nKeep shared caches under their existing session lifecycle cleanup and bounded eviction; individual engine disposal retains other sessions' state. Clear stale markers when the new trigger is unspecified.\n\nValidation: two deterministic regressions fail on upstream; TypeScript compilation and all 120 context tests passed after the fix. This is distinct from the compacted-projection issue #378.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/24"
+    },
+    {
+      "slug": "safe-daemon-upgrade",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-safe-daemon-upgrade",
+      "head_sha": "e9bf7097ff22b621ff2546b6a81ebc3c69dd8cbb",
+      "title": "fix: preserve daemon installs on failed or interrupted upgrades",
+      "body": "On current main c3570e1, scripts/auto-install.sh downloads a daemon upgrade directly over ~/.local/bin/libravdbd before checking its checksum. DOWNLOADED_BIN_PATH points at the installed binary, and cleanup_on_exit removes that path on any failure. A download error, unavailable checksum, or checksum mismatch can therefore overwrite and delete an existing working daemon.\n\nReproduced against the original installer logic in a disposable destination directory: an existing executable is absent after the new asset download succeeds but checksum HTTP retrieval fails. The fix stages downloads beside the installed file, validates/chmods the stage, and atomically renames it only after verification. Four offline regressions cover partial download, checksum retrieval failure, mismatch, and successful replacement; all pass. Staged files are removed and existing binaries remain intact on each failure. Bash syntax and direct/piped help checks passed.\n\nThe installer also registers cleanup as its INT/TERM handler without exiting. Separate EXIT cleanup from signal exit handlers so interrupted installation stops with status 130/143. The original exact SIGTERM handler reproduction continues and exits 0; the corrected handlers stop with the expected statuses.\n\nValidation: four offline upgrade regressions pass, actual signal-handler reproductions pass, and Bash syntax/direct/piped help checks pass.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/25"
+    },
+    {
+      "slug": "docker-download-errors",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-docker-download-errors",
+      "head_sha": "47d326bb6e85dce143b5a8909f6733c92e56fa31",
+      "title": "fix: fail Docker builds on invalid daemon downloads",
+      "body": "On current main c3570e1, deploy/Dockerfile uses curl -sL without --fail to download the daemon. HTTP errors therefore produce a successful curl exit status and write an HTML/error response to /usr/local/bin/libravdbd; chmod succeeds, so the image build appears successful but its entrypoint is unusable. Latest-release resolution also ignores HTTP failures and unsupported TARGETARCH values silently choose amd64.\n\nReproduced the exact daemon download RUN command in an Alpine container with LIBRAVDBD_VERSION=does-not-exist and TARGETARCH=amd64. The original command exits 0 on HTTP404; the patched command exits22. An independent curl probe confirms the downloaded body is 9 bytes, 'Not Found'. The fix uses curl -fsSL, rejects an empty latest-release tag, and rejects unsupported architectures. No full production image or real daemon startup was tested.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/26"
+    },
+    {
+      "slug": "source-setup-docs",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-source-setup-docs",
+      "head_sha": "776f177729f8e30692e0baa6be075dcab10e76f6",
+      "title": "docs: repair source setup and benchmark instructions",
+      "body": "At upstream `c3570e1`, `docs/development.md` and `docs/contributing.md` instruct contributors to run `bash scripts/build-vector service.sh`. There is no such script; the actual script is `scripts/build-daemon.sh`, and it writes `.daemon-bin/libravdbd`, not the documented `.vector service-bin/libravdbd`.\n\nThe development guide also says checked-in `src/generated/libravdb/ipc/v1/rpc_pb.js` supplies runtime contracts and warns against imports from `@xdarkicex/libravdb-contracts`. There is no src/generated directory; current production code imports the external contracts package and client descriptor.\n\n`docs/performance-and-tuning.md` advertises `pnpm run benchmark:longmemeval`, a dataset runner, daemon spawn/restart behavior, and runner env controls. Neither that package script nor a dataset runner exists. The committed tools diagnose an existing prompt report and score existing hypotheses.\n\nUpdate docs to the actual daemon preparation script, external service contracts, mocked integration-test scope, build outputs, and available diagnose/score commands.\n\nValidated explicit binary preparation and a LongMemEval diagnosis fixture. All named package scripts in the changed source docs exist. The pnpm launcher in this environment tried an automatic install and refused its symlinked node_modules without a TTY; the underlying diagnostic was run successfully with node.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/27"
+    },
+    {
+      "slug": "tls-configuration-docs",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-tls-configuration-docs",
+      "head_sha": "b7aa01b2f67350cc1d2fcb0f7d1cd078859de12d",
+      "title": "docs: correct Helm mTLS and client TLS configuration",
+      "body": "At upstream `c3570e1`, both README Helm examples labeled mTLS set only `tls.enabled`, `tls.cert`, and `tls.key`. The chart includes the client trust CA only when `tls.ca` is present; without it the daemon is configured for server TLS rather than mutual client authentication. The unquoted `$(base64 -i file)` values also split wrapped base64 output into multiple shell arguments. Running the Docker line first changes into deploy/, so the subsequent ./deploy/helm path is wrong.\n\nThe client TLS docs contain two contradictory instructions: configuration.md says loopback is always plaintext regardless of any TLS settings, while the client supports `grpcEndpointTlsMode: \"tls\"` for TCP loopback; mTLS_configuration.md also says client certs never apply on loopback. Conversely Unix sockets remain plaintext even when TLS is forced. The guides imply cert-manager certificates are automatically trusted, although trust depends on the issuer, and prohibit using a self-signed server certificate as its trust anchor.\n\nAdd the CA to both mTLS recipes, quote newline-free base64 values, keep the Docker cwd local to a subshell, and accurately describe TCP/Unix overrides and CA trust.\n\nValidated both exact Helm shell commands with a fake helm recorder and multiline certificate fixtures: cert/key/CA round-trip as one argument each. Client behavior was cross-checked against libravdb-client.ts; chart CA behavior against its secret/deployment templates. Actual Helm rendering was not run because Helm is unavailable.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/28"
+    },
+    {
+      "slug": "daemon-config-and-security-docs",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-daemon-config-and-security-docs",
+      "head_sha": "54436b00d42d696e67a56cb3a91504a6e842bd6f",
+      "title": "docs: clarify daemon configuration, privacy and plugin lifecycle",
+      "body": "At upstream `c3570e1`, README promises a zero-cloud guarantee, no data leaving the machine, and PII enforcement that cannot be bypassed. docs/security.md says the plugin connects only locally and an external summarizer is the sole optional runtime network path. However remote daemon endpoints are supported, and the daemon can use remote embedding/summarizer backends. Reply rules are lowercased literal substring matching in the host's before_agent_reply cleanedBody, not general PII detection or a guarantee across every output path.\n\nHOOK.md still names the CLI memory and says gateway_stop shuts down the daemon process and compact has a sidecar RPC fallback. Current CLI root is libravdb; runtime shutdown runs plugin shutdown tasks, requests a flush, and marks its gRPC client closed. The separately supervised daemon is not terminated. WHITEPAPER.md also describes plugin supervision and JSON-RPC despite current connect-only gRPC transport.\n\nScope locality to local daemon/backends; describe keyword filtering and host-hook coverage accurately; clarify intentional user/global scope sharing; align CLI, shutdown, transport, and supervision documentation with the current implementation.\n\nAll 74 local Markdown link targets across README/HOOK/WHITEPAPER/CHANGELOG/docs resolved, and git diff --check passed. This doc fix does not claim to make the reply hook work on hosts that do not support it.\n\nAt upstream `c3570e1`, configuration.md claims dbPath chooses the database, embeddingRuntimePath and embeddingModelPath map to daemon environment variables, and embedding-profiles.md says onnxDevice is passed through as LIBRAVDB_ONNX_DEVICE. The plugin is connect-only: it creates LibravDBClient with endpoint, timeout, TLS, and tenant routing, and does not transmit daemon database/model configuration or set the service environment. ONNX path fields are only used for local plugin-side validation when embeddingBackend is onnx-local; profile names are discovery metadata.\n\nChanging those plugin fields therefore does not change the active database/backend/provider, and may lead operators to troubleshoot the wrong process. The RPC timeout docs also still say 30000 although plugin-runtime.ts and the manifest default to 120000.\n\nDocument separate daemon YAML/service environment configuration and the limited purpose of accepted plugin model fields, and fix the timeout default. This commit also clarifies that a positive compactThreshold overrides compactSessionTokenBudget=0, matching the related context-engine correction and its existing explicit-override test.\n\nValidated by tracing config references and client construction; no service/model changes are made by these fields. The compaction-zero wording assumes the companion context-engine fix, while retaining explicit-threshold precedence.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/29"
+    },
+    {
+      "slug": "durable-turn-acks",
+      "target_repository": "xDarkicex/openclaw-memory-libravdb",
+      "base": "main",
+      "head": "compoodment:codex/fix-durable-turn-acks",
+      "head_sha": "93376f7ecd8e0d83012f227071982d44f9af479a",
+      "title": "fix: require complete daemon acknowledgments before committing turns",
+      "body": "A partial daemon acknowledgment currently resolves ingestion successfully, so commitTurn marks the whole advancement committed and its retry skips unstored messages. Cursor-gap recovery is worse: it records every seed message even when the retry confirms zero messages, only a prefix, or another gap.\n\nPersist only the acknowledged prefix and reject incomplete ingestion to keep the advancement retryable. Persist a recoveryPending marker so a replacement engine/restart retries the full unconfirmed source suffix, including messages before the host's prePrompt boundary. Use stable, domain-separated synthetic message IDs for advancement/recovery retries when the host omits IDs. Clear the marker only after complete confirmation; retain legacy no-cursor compatibility.\n\nValidation: baseline regressions fail for partial normal ACKs and zero/partial/rejected recovery ACKs. Independent branch type checking and all 169 context/configured integration tests pass; the final identity namespace change also passes all 10 targeted ACK/commit tests. A second reviewer independently verifies exact unconfirmed suffixes, final hashes, and duplicate detection with explicit/missing IDs and replacement engines. Combined audit validation is run separately.",
+      "historical_closed_fork_pr_url": "https://github.com/compoodment/openclaw-memory-libravdb/pull/30"
+    }
+  ],
+  "issue_candidates": [
+    {
+      "title": "bug: causal graph expansion bypasses token and subagent budgets",
+      "related_submission_slug": "graph-expansion-budgets",
+      "evidence": "## Reproduction\n\nAt upstream `c3570e1` (v1.10.25), execute `memory_expand({ record_id: \"record-1\", maxTokens: 100 })` against a daemon response containing a 2,000-character connected record. The tool returns the entire record with `exceededBudget: false`. After preparing a child session with `subagentTokenBudget: 100`, two graph expansions both reach the daemon; graph mode never consumes the budget. A summary containing exactly 400 characters also returns its extra header despite a 100-token budget.\n\n## Expected behavior\n\nGraph and summary recall should honor the same maxTokens cap and the child session budget. The tool should omit oversized connected data and return an exhausted-budget response before sending another RPC.\n\n## Fix and validation\n\nMove the subagent budget gate before the graph/summary branch, clamp requests to the tool maximum, bound graph output, and count summary headers. Three deterministic regression tests failed on upstream and pass with the patch. All 10 memory-recall unit tests passed at this commit. Duplicate searches for graph expansion and memory_expand budget found no matching issue/PR.\n\nThis uses the existing approximate 4-characters/token accounting; it does not introduce a tokenizer.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: memory search loop guard blocks changed filters and retries after failures",
+      "related_submission_slug": "search-loop-guard",
+      "evidence": "## Reproduction\n\nAt upstream `c3570e1` (v1.10.25), use the same session and query to search `corpus: \"all\"`, then `corpus: \"sessions\"` or `\"memory\"`. The second request is blocked as a duplicate even though it addresses a different corpus. Changing kind, signals, maxResults, or minScore has the same problem. Two queries with the same first 80 characters collide. If a daemon RPC fails once, an immediate retry is also blocked for 60 seconds despite there being no previous results.\n\n## Expected behavior\n\nOnly equivalent successful or in-flight requests should trigger the loop guard. Changed retrieval parameters and failed requests should remain callable.\n\n## Fix and validation\n\nUse the entire normalized query plus normalized search parameters and full manager context for the guard key. Release reservations after failure and reject unsupported wiki requests before reserving a key. Two regression tests failed on upstream; all 8 memory-tools tests pass with the patch. Duplicate searches for duplicate search, dedup, filters, and loop guard found no existing matching report.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: explicit memory corpus bypasses crossSessionRecall=false",
+      "related_submission_slug": "cross-session-recall",
+      "evidence": "## Reproduction\n\nConfigure `crossSessionRecall: false`, then call the runtime manager or `libravdb_memory_search` with `corpus: \"memory\"`. At upstream `c3570e1` (v1.10.25), this sends a multi-collection search to `user:<userId>` and `global`, returning cross-session durable memory. It occurs both with and without an active session.\n\n## Expected behavior\n\nREADME.md and docs/configuration.md specify that when crossSessionRecall is false only session-scoped memories are retrieved. An explicit corpus filter should not bypass that setting; requesting memory-only recall should return no results.\n\n## Fix and validation\n\nApply the configuration gate before selecting durable collections. Keep all/session corpus behavior session-scoped and return no collections for memory-only corpus while disabled. The new regression failed on upstream. All 21 memory-runtime unit tests pass with the patch. Searches for crossSessionRecall corpus and cross-session corpus found no matching issue/PR.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: memory_grep exceeds its result limit and hides truncation",
+      "related_submission_slug": "grep-result-limit",
+      "evidence": "## Reproduction\n\nAt upstream `c3570e1` (v1.10.25), call `memory_grep({ pattern: \"needle\", scope: \"both\", limit: 1 })` when one matching summary and one matching turn exist. The result contains two hits, reports totalMatches 2, and reports truncated false. With scope summaries and two matches, limit 1 still reports truncated false after omitting the second match.\n\n## Expected behavior\n\nThe documented maximum result count should apply across both collections, and omitted matching candidates should set truncated true.\n\n## Fix and validation\n\nUse one shared result count for both corpora, cap the requested limit to the schema maximum, and track omitted matches. Both regression tests failed on upstream; all 12 memory-recall tests pass with the patch. Duplicate searches for memory_grep limit and memory_grep found only the distinct existing regex/event-loop issue #317.\n\nThis patch preserves the existing semantic-candidate search design; it does not claim to make grep exhaustive over every stored record.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: maxRules=0 activates unlimited rules instead of disabling them",
+      "related_submission_slug": "disable-hard-rules",
+      "evidence": "## Reproduction\n\nREADME.md and the plugin manifest promise maxRules=0 disables rules entirely. At upstream c3570e1 (v1.10.25), set maxRules to zero, then invoke set_rule. Creation still succeeds, existing rules remain in the injected hard_constraints block, and scanReply continues blocking matching output. Zero bypasses the eviction condition and makes the store unlimited.\n\n## Fix\n\nReject creation while disabled, omit active-rule listings/context and reply scans, and preserve persisted rules so they can be re-enabled. Reset configuration when initializing another store.\n\n## Validation\n\nThe disabled-rules regression failed on upstream; both new rules tests pass after the fix. Searches for maxRules and rules disabled found no matching issue/PR.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: memory prompt mandates tools absent from availableTools",
+      "related_submission_slug": "available-tool-guidance",
+      "evidence": "## Reproduction\n\nAt upstream c3570e1 (v1.10.25), call the registered memory prompt builder with availableTools=new Set(). The static header still requires libravdb_memory_search and list_user_cards/get_user_card before answering. With only search and get_user_card available, guidance also mandates update_user_card and hard-constraint tools that are absent. Card-only and summary-recall-only tool surfaces receive no useful dynamic guidance because the builder returns early unless search exists.\n\n## Fix\n\nKeep the static header about automatic ingestion. Generate each tool instruction from availableTools, gate maintenance on update_user_card itself, and allow card/recall guidance without search.\n\n## Validation\n\nBoth new regressions failed on upstream. All 7 memory-provider tests pass after the fix. Searches for availableTools and unavailable prompt found no matching issue/PR.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: CLI flush claims deletion succeeded when daemon returns ok=false",
+      "related_submission_slug": "flush-refusal",
+      "evidence": "## Reproduction\n\nAt upstream c3570e1 (v1.10.25), execute libravdb flush --user-id alice --yes against a daemon returning the defined FlushNamespaceResponse { ok: false }. The command prints Deleted durable memory namespace user:alice and exits zero.\n\n## Expected behavior\n\nA rejected deletion must return a nonzero exit status and must not claim that stored memories were removed.\n\n## Fix and validation\n\nCheck the response boolean before printing success. The regression failed on upstream and all 16 CLI tests pass after the fix, including runtime shutdown after failure. Searches for flush ok found no matching issue/PR. The fix was validated with a deterministic fake daemon response; no actual namespace deletion was performed.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: truncating an ingested Markdown file leaves its previous authored content searchable",
+      "related_submission_slug": "empty-markdown",
+      "evidence": "On main c3570e1, IngestQueue.enqueueIngest only sends chunks while offset < text.length. An empty file sends no RPC, returns success, and the directory adapter saves the new empty-file hash/size. The daemon retains the old document while subsequent scans and restarts treat the empty file as synchronized.\n\nReproduction: ingest notes.md containing a fact, truncate it to zero bytes, then refresh. No delete/replace RPC is sent and the old fact remains in the fake daemon document map. Another refresh skips the file via the new snapshot.\n\nExpected: the empty replacement retires the authored document before updating the local snapshot. The proposed fix uses the existing deletion retry path for empty ingestion and covers both normal and Infinity chunking modes, delete failures, and an integration truncation/snapshot regression.\n\nThe dream candidate parser and Obsidian inline-tag detector toggle a Boolean for any line beginning with ``` or ~~~. They do not retain the opening marker character/length or require a closing fence to have no info text. A four-backtick fence containing a literal triple-backtick example, mismatched fence markers, or ```not-a-close therefore exposes code as ordinary content.\n\nDream reproduction: under ## Deep Sleep, open a ````markdown fence, include a ``` line, then a bullet '- Example {score=0.9 recall=3 unique=2}', then close with ````. The code example is parsed as a promotion candidate. The equivalent fenced #project example causes an otherwise untagged Obsidian note to be ingested.\n\nThe dream parser also ignores # headings as section boundaries, so a bullet after '# Examples' inherits the previous Deep Sleep section. Valid headings with optional trailing # markers or CRLF are missed.\n\nExpected: fenced examples stay excluded, and ATX headings delimit the active section. The proposed shared fence tracker matches closing marker character/length and trailing whitespace; heading parsing handles levels 1-6, closing hashes, empty headings, and CRLF. Regression tests cover all these cases.\n\nBump the ingestion snapshot version from 3 to 4 so existing snapshots are revalidated once. Migration regressions reproduce previously poisoned empty-file and fenced-tag snapshots and verify stale authored content is deleted. These behavior changes are kept together because they share the migration.\n\nValidation: independent branch TypeScript compilation and dream-promotion, queue, and Markdown integration suites pass. The migration regressions fail with the old version and pass with version 4. The separate fence-handling proposal is consolidated into this change.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: turn-memory cache keys can collide across sessions and invalidate other sessions",
+      "related_submission_slug": "turn-cache-isolation",
+      "evidence": "The turn cache concatenates session ID and query with a colon. Session `a:b` with query `c` and session `a` with query `b:c` share a cache key; invalidating session `a` also invalidates session `a:b`.\n\nEncode the session component with JSON before adding the separator, and use the same encoding for invalidation. Regression coverage checks collisions, exact-session invalidation, and escaped session IDs; all 13 cache tests pass.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: Markdown fence and heading handling can promote dream code examples and ingest fenced Obsidian tags",
+      "related_submission_slug": "empty-markdown",
+      "evidence": "On main c3570e1, IngestQueue.enqueueIngest only sends chunks while offset < text.length. An empty file sends no RPC, returns success, and the directory adapter saves the new empty-file hash/size. The daemon retains the old document while subsequent scans and restarts treat the empty file as synchronized.\n\nReproduction: ingest notes.md containing a fact, truncate it to zero bytes, then refresh. No delete/replace RPC is sent and the old fact remains in the fake daemon document map. Another refresh skips the file via the new snapshot.\n\nExpected: the empty replacement retires the authored document before updating the local snapshot. The proposed fix uses the existing deletion retry path for empty ingestion and covers both normal and Infinity chunking modes, delete failures, and an integration truncation/snapshot regression.\n\nThe dream candidate parser and Obsidian inline-tag detector toggle a Boolean for any line beginning with ``` or ~~~. They do not retain the opening marker character/length or require a closing fence to have no info text. A four-backtick fence containing a literal triple-backtick example, mismatched fence markers, or ```not-a-close therefore exposes code as ordinary content.\n\nDream reproduction: under ## Deep Sleep, open a ````markdown fence, include a ``` line, then a bullet '- Example {score=0.9 recall=3 unique=2}', then close with ````. The code example is parsed as a promotion candidate. The equivalent fenced #project example causes an otherwise untagged Obsidian note to be ingested.\n\nThe dream parser also ignores # headings as section boundaries, so a bullet after '# Examples' inherits the previous Deep Sleep section. Valid headings with optional trailing # markers or CRLF are missed.\n\nExpected: fenced examples stay excluded, and ATX headings delimit the active section. The proposed shared fence tracker matches closing marker character/length and trailing whitespace; heading parsing handles levels 1-6, closing hashes, empty headings, and CRLF. Regression tests cover all these cases.\n\nBump the ingestion snapshot version from 3 to 4 so existing snapshots are revalidated once. Migration regressions reproduce previously poisoned empty-file and fenced-tag snapshots and verify stale authored content is deleted. These behavior changes are kept together because they share the migration.\n\nValidation: independent branch TypeScript compilation and dream-promotion, queue, and Markdown integration suites pass. The migration regressions fail with the old version and pass with version 4. The separate fence-handling proposal is consolidated into this change.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: Markdown backpressure retries ignore daemon delays and can stall permanently on stale WAL feedback",
+      "related_submission_slug": "markdown-backpressure",
+      "evidence": "DirectoryMarkdownSourceAdapter receives walDepth/walCapacity only in ingestion feedback. Once one RPC reports WAL usage above 80%, syncCandidates stops before the next RPC, and later scans never reset those fields. There is no polling path that can refresh them. Even after the daemon drains its WAL, all remaining files remain blocked indefinitely.\n\nReproduction: two Markdown files; first ingest returns acceptMore=true, walDepth=90, walCapacity=100; later responses would return depth=0. The first scan only submits one file, and refreshing still never submits the second because stale WAL feedback blocks that RPC.\n\nAdditionally, scheduleRootScan(root, retryAfterMs) called during a scan only sets dirty=true, discarding the requested delay. Its finally block schedules at the regular debounce interval. With debounce 0, the daemon's retryAfterMs=100 is reduced to an immediate retry; the WAL branch's requested 2000 ms is also discarded.\n\nExpected: preserve requested retry delays and allow one new readiness probe on a fresh scan. Regression tests assert no second ingest during the retry window and successful recovery after one full-WAL response. An existing watcher test now explicitly triggers its fake watcher instead of depending on the buggy immediate retry.\n\nValidation: targeted regressions and TypeScript test compilation pass. Combined audit validation subsequently passed 325 unit and 63 integration tests; those preserved results are recorded separately.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: unsuccessful authored-document deletion responses are treated as successful retirement",
+      "related_submission_slug": "authored-delete-refusal",
+      "evidence": "DeleteAuthoredDocumentResponse has an ok Boolean, but the Markdown adapter maps the response to undefined and IngestQueue.enqueueDelete retries only thrown errors. A resolved {ok:false} is treated as success: prune/retirement removes local file state and writes the snapshot even though the daemon kept the authored document. Future scans no longer track the removed path, so the stale document can remain permanently searchable.\n\nReproduction: ingest notes.md, remove the file, and return {ok:false} from deleteAuthoredDocument. Refresh removes its snapshot entry after only one attempt while the fake daemon retains the document.\n\nExpected: ok=false fails the delete operation, participates in the bounded retry policy, and prevents local retirement until success. The proposed fix preserves the transport response and rejects unsuccessful deletion responses. Unit tests verify retry and exhausted failure; integration coverage verifies a refusal is retried before local snapshot retirement.\n\nValidation: targeted regressions and TypeScript test compilation pass. Combined audit validation subsequently passed 325 unit and 63 integration tests; those preserved results are recorded separately.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: equal-size Markdown rewrites with preserved modification times are never synchronized",
+      "related_submission_slug": "markdown-preserved-mtime",
+      "evidence": "The scanner already reads ctimeMs, but its unchanged predicate and persistent FileState retain only size and mtimeMs. Backup restore, cp -p, synchronization tools, and explicit utimes can rewrite a file while preserving size and mtime. The scanner then skips the file indefinitely, keeping its former authored text in memory.\n\nReproduction: ingest 'Original fact' with mtime 42, overwrite with equal-length 'Replaced fact', and retain mtime 42 while ctime advances. Refresh performs no ingestion on main and the old fact remains searchable.\n\nExpected: ctime participates in the metadata sentinel before skipping hashing. The proposed fix records ctime in new snapshots and hashes old snapshots lacking it once, preserving backward compatibility. Regression coverage checks live rewrites and migration from a legacy snapshot that omitted ctime.\n\nValidation: targeted regressions and TypeScript test compilation pass. Combined audit validation subsequently passed 325 unit and 63 integration tests; those preserved results are recorded separately.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "Helm persistence.enabled=false references a PVC that the chart never creates",
+      "related_submission_slug": "helm-ephemeral-storage",
+      "evidence": "On current main c3570e1, `helm template audit deploy/helm/libravdbd --set persistence.enabled=false` omits PersistentVolumeClaim resources but still renders a Deployment volume with `persistentVolumeClaim.claimName: audit-data`. Installing that supported values override leaves the pod waiting for a missing claim. The Deployment should use ephemeral storage when persistence is disabled.\n\nReproduced with Helm 3.16.4. The fix uses emptyDir for the data volume when disabled and retains the matching data claim with default persistence. Two render regressions passed and Helm lint passed.\n\nOn current main c3570e1, `helm template audit deploy/helm/libravdbd --set service.port=6000` sets both the exposed Service port and the Deployment's named grpc containerPort to 6000, while the daemon ConfigMap still specifies grpc_endpoint: tcp:0.0.0.0:50051. Since the Service uses targetPort: grpc, traffic is forwarded to 6000 and cannot reach the daemon. Changing config.grpcEndpoint alone has the inverse mismatch.\n\nThe fix derives the named containerPort from the daemon's configured TCP endpoint and leaves service.port as the exposed Service port. Render regressions check both override directions and reject unsupported/invalid listener endpoints. Four Helm render tests pass and Helm lint with a non-default exposed port passes. No Kubernetes cluster was used.\n\nValidation: four actual Helm render tests and lint pass with persistence disabled and a non-default exposed port. TypeScript compilation passes. No live Kubernetes deployment performed.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "Terraform VM bootstrap bind-mounts root-owned directories into the non-root daemon",
+      "related_submission_slug": "vm-writable-storage",
+      "evidence": "The VM cloud-init creates root-owned 0755 data/model directories and bind-mounts them into the image, whose daemon runs as UID 1000. Database/model writes fail with Permission denied.\n\nUse Docker named volumes so first-use population inherits the image directories' non-root ownership. Validation: reproduced failed writes to the original mounts as UID 1000, then verified successful data/model writes using named volumes with a matching image ownership fixture. The extracted shell bootstrap passes `bash -n`. No AWS apply was performed.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "LongMemEval scoring fails for relative hypothesis and dataset paths",
+      "related_submission_slug": "longmemeval-paths",
+      "evidence": "The scorer validates relative hypothesis/data paths in the caller's directory, then passes them unchanged to Python after switching to the evaluator checkout. Valid files fail with FileNotFoundError; relative evaluator checkouts can also double the path prefix.\n\nResolve all three supplied paths before spawning Python. A real subprocess regression fails against upstream and passes after the fix. It uses a relative evaluator checkout containing a space and verifies dataset access, evaluation log, and metrics placement. TypeScript test compilation passes.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "A failed manual daemon upgrade removes the previously working installed binary",
+      "related_submission_slug": "safe-daemon-upgrade",
+      "evidence": "On current main c3570e1, scripts/auto-install.sh downloads a daemon upgrade directly over ~/.local/bin/libravdbd before checking its checksum. DOWNLOADED_BIN_PATH points at the installed binary, and cleanup_on_exit removes that path on any failure. A download error, unavailable checksum, or checksum mismatch can therefore overwrite and delete an existing working daemon.\n\nReproduced against the original installer logic in a disposable destination directory: an existing executable is absent after the new asset download succeeds but checksum HTTP retrieval fails. The fix stages downloads beside the installed file, validates/chmods the stage, and atomically renames it only after verification. Four offline regressions cover partial download, checksum retrieval failure, mismatch, and successful replacement; all pass. Staged files are removed and existing binaries remain intact on each failure. Bash syntax and direct/piped help checks passed.\n\nThe installer also registers cleanup as its INT/TERM handler without exiting. Separate EXIT cleanup from signal exit handlers so interrupted installation stops with status 130/143. The original exact SIGTERM handler reproduction continues and exits 0; the corrected handlers stop with the expected statuses.\n\nValidation: four offline upgrade regressions pass, actual signal-handler reproductions pass, and Bash syntax/direct/piped help checks pass.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "Docker image builds succeed when a daemon release download returns HTTP 404",
+      "related_submission_slug": "docker-download-errors",
+      "evidence": "On current main c3570e1, deploy/Dockerfile uses curl -sL without --fail to download the daemon. HTTP errors therefore produce a successful curl exit status and write an HTML/error response to /usr/local/bin/libravdbd; chmod succeeds, so the image build appears successful but its entrypoint is unusable. Latest-release resolution also ignores HTTP failures and unsupported TARGETARCH values silently choose amd64.\n\nReproduced the exact daemon download RUN command in an Alpine container with LIBRAVDBD_VERSION=does-not-exist and TARGETARCH=amd64. The original command exits 0 on HTTP404; the patched command exits22. An independent curl probe confirms the downloaded body is 9 bytes, 'Not Found'. The fix uses curl -fsSL, rejects an empty latest-release tag, and rejects unsupported architectures. No full production image or real daemon startup was tested.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "Helm Service port overrides target a port where the daemon is not listening",
+      "related_submission_slug": "helm-ephemeral-storage",
+      "evidence": "On current main c3570e1, `helm template audit deploy/helm/libravdbd --set persistence.enabled=false` omits PersistentVolumeClaim resources but still renders a Deployment volume with `persistentVolumeClaim.claimName: audit-data`. Installing that supported values override leaves the pod waiting for a missing claim. The Deployment should use ephemeral storage when persistence is disabled.\n\nReproduced with Helm 3.16.4. The fix uses emptyDir for the data volume when disabled and retains the matching data claim with default persistence. Two render regressions passed and Helm lint passed.\n\nOn current main c3570e1, `helm template audit deploy/helm/libravdbd --set service.port=6000` sets both the exposed Service port and the Deployment's named grpc containerPort to 6000, while the daemon ConfigMap still specifies grpc_endpoint: tcp:0.0.0.0:50051. Since the Service uses targetPort: grpc, traffic is forwarded to 6000 and cannot reach the daemon. Changing config.grpcEndpoint alone has the inverse mismatch.\n\nThe fix derives the named containerPort from the daemon's configured TCP endpoint and leaves service.port as the exposed Service port. Render regressions check both override directions and reject unsupported/invalid listener endpoints. Four Helm render tests pass and Helm lint with a non-default exposed port passes. No Kubernetes cluster was used.\n\nValidation: four actual Helm render tests and lint pass with persistence disabled and a non-default exposed port. TypeScript compilation passes. No live Kubernetes deployment performed.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "Installer handles SIGINT and SIGTERM without terminating",
+      "related_submission_slug": "safe-daemon-upgrade",
+      "evidence": "On current main c3570e1, scripts/auto-install.sh downloads a daemon upgrade directly over ~/.local/bin/libravdbd before checking its checksum. DOWNLOADED_BIN_PATH points at the installed binary, and cleanup_on_exit removes that path on any failure. A download error, unavailable checksum, or checksum mismatch can therefore overwrite and delete an existing working daemon.\n\nReproduced against the original installer logic in a disposable destination directory: an existing executable is absent after the new asset download succeeds but checksum HTTP retrieval fails. The fix stages downloads beside the installed file, validates/chmods the stage, and atomically renames it only after verification. Four offline regressions cover partial download, checksum retrieval failure, mismatch, and successful replacement; all pass. Staged files are removed and existing binaries remain intact on each failure. Bash syntax and direct/piped help checks passed.\n\nThe installer also registers cleanup as its INT/TERM handler without exiting. Separate EXIT cleanup from signal exit handlers so interrupted installation stops with status 130/143. The original exact SIGTERM handler reproduction continues and exits 0; the corrected handlers stop with the expected statuses.\n\nValidation: four offline upgrade regressions pass, actual signal-handler reproductions pass, and Bash syntax/direct/piped help checks pass.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "docs: container wrapper never checks the configured Unix socket and can start gateway before daemon",
+      "related_submission_slug": "container-startup-docs",
+      "evidence": "The documented `sh` wrapper checks `-S` on a `unix:` endpoint string, uses a Bash brace loop, and invokes the plugin bundle as if it were the OpenClaw gateway CLI. It can continue before the daemon socket exists and never launch the intended gateway.\n\nUse a POSIX polling loop on the actual socket path, detect daemon exit and timeout, and execute the installed OpenClaw CLI. Document process-supervision and stale-socket limits.\n\nValidation: extracted the exact documentation block and executed it under `/bin/sh` with mocked delayed readiness, early daemon exit, and never-ready timeout cases.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "docs: source setup and LongMemEval instructions refer to nonexistent files and commands",
+      "related_submission_slug": "source-setup-docs",
+      "evidence": "At upstream `c3570e1`, `docs/development.md` and `docs/contributing.md` instruct contributors to run `bash scripts/build-vector service.sh`. There is no such script; the actual script is `scripts/build-daemon.sh`, and it writes `.daemon-bin/libravdbd`, not the documented `.vector service-bin/libravdbd`.\n\nThe development guide also says checked-in `src/generated/libravdb/ipc/v1/rpc_pb.js` supplies runtime contracts and warns against imports from `@xdarkicex/libravdb-contracts`. There is no src/generated directory; current production code imports the external contracts package and client descriptor.\n\n`docs/performance-and-tuning.md` advertises `pnpm run benchmark:longmemeval`, a dataset runner, daemon spawn/restart behavior, and runner env controls. Neither that package script nor a dataset runner exists. The committed tools diagnose an existing prompt report and score existing hypotheses.\n\nUpdate docs to the actual daemon preparation script, external service contracts, mocked integration-test scope, build outputs, and available diagnose/score commands.\n\nValidated explicit binary preparation and a LongMemEval diagnosis fixture. All named package scripts in the changed source docs exist. The pnpm launcher in this environment tried an automatic install and refused its symlinked node_modules without a TTY; the underlying diagnostic was run successfully with node.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "docs: Helm mTLS recipe omits client CA and TLS guides contradict loopback override",
+      "related_submission_slug": "tls-configuration-docs",
+      "evidence": "At upstream `c3570e1`, both README Helm examples labeled mTLS set only `tls.enabled`, `tls.cert`, and `tls.key`. The chart includes the client trust CA only when `tls.ca` is present; without it the daemon is configured for server TLS rather than mutual client authentication. The unquoted `$(base64 -i file)` values also split wrapped base64 output into multiple shell arguments. Running the Docker line first changes into deploy/, so the subsequent ./deploy/helm path is wrong.\n\nThe client TLS docs contain two contradictory instructions: configuration.md says loopback is always plaintext regardless of any TLS settings, while the client supports `grpcEndpointTlsMode: \"tls\"` for TCP loopback; mTLS_configuration.md also says client certs never apply on loopback. Conversely Unix sockets remain plaintext even when TLS is forced. The guides imply cert-manager certificates are automatically trusted, although trust depends on the issuer, and prohibit using a self-signed server certificate as its trust anchor.\n\nAdd the CA to both mTLS recipes, quote newline-free base64 values, keep the Docker cwd local to a subshell, and accurately describe TCP/Unix overrides and CA trust.\n\nValidated both exact Helm shell commands with a fake helm recorder and multiline certificate fixtures: cert/key/CA round-trip as one argument each. Client behavior was cross-checked against libravdb-client.ts; chart CA behavior against its secret/deployment templates. Actual Helm rendering was not run because Helm is unavailable.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "docs: privacy and lifecycle promises exceed the connect-only plugin behavior",
+      "related_submission_slug": "daemon-config-and-security-docs",
+      "evidence": "At upstream `c3570e1`, README promises a zero-cloud guarantee, no data leaving the machine, and PII enforcement that cannot be bypassed. docs/security.md says the plugin connects only locally and an external summarizer is the sole optional runtime network path. However remote daemon endpoints are supported, and the daemon can use remote embedding/summarizer backends. Reply rules are lowercased literal substring matching in the host's before_agent_reply cleanedBody, not general PII detection or a guarantee across every output path.\n\nHOOK.md still names the CLI memory and says gateway_stop shuts down the daemon process and compact has a sidecar RPC fallback. Current CLI root is libravdb; runtime shutdown runs plugin shutdown tasks, requests a flush, and marks its gRPC client closed. The separately supervised daemon is not terminated. WHITEPAPER.md also describes plugin supervision and JSON-RPC despite current connect-only gRPC transport.\n\nScope locality to local daemon/backends; describe keyword filtering and host-hook coverage accurately; clarify intentional user/global scope sharing; align CLI, shutdown, transport, and supervision documentation with the current implementation.\n\nAll 74 local Markdown link targets across README/HOOK/WHITEPAPER/CHANGELOG/docs resolved, and git diff --check passed. This doc fix does not claim to make the reply hook work on hosts that do not support it.\n\nAt upstream `c3570e1`, configuration.md claims dbPath chooses the database, embeddingRuntimePath and embeddingModelPath map to daemon environment variables, and embedding-profiles.md says onnxDevice is passed through as LIBRAVDB_ONNX_DEVICE. The plugin is connect-only: it creates LibravDBClient with endpoint, timeout, TLS, and tenant routing, and does not transmit daemon database/model configuration or set the service environment. ONNX path fields are only used for local plugin-side validation when embeddingBackend is onnx-local; profile names are discovery metadata.\n\nChanging those plugin fields therefore does not change the active database/backend/provider, and may lead operators to troubleshoot the wrong process. The RPC timeout docs also still say 30000 although plugin-runtime.ts and the manifest default to 120000.\n\nDocument separate daemon YAML/service environment configuration and the limited purpose of accepted plugin model fields, and fix the timeout default. This commit also clarifies that a positive compactThreshold overrides compactSessionTokenBudget=0, matching the related context-engine correction and its existing explicit-override test.\n\nValidated by tracing config references and client construction; no service/model changes are made by these fields. The compaction-zero wording assumes the companion context-engine fix, while retaining explicit-threshold precedence.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "docs: plugin model and database settings are described as configuring a daemon they do not configure",
+      "related_submission_slug": "daemon-config-and-security-docs",
+      "evidence": "At upstream `c3570e1`, README promises a zero-cloud guarantee, no data leaving the machine, and PII enforcement that cannot be bypassed. docs/security.md says the plugin connects only locally and an external summarizer is the sole optional runtime network path. However remote daemon endpoints are supported, and the daemon can use remote embedding/summarizer backends. Reply rules are lowercased literal substring matching in the host's before_agent_reply cleanedBody, not general PII detection or a guarantee across every output path.\n\nHOOK.md still names the CLI memory and says gateway_stop shuts down the daemon process and compact has a sidecar RPC fallback. Current CLI root is libravdb; runtime shutdown runs plugin shutdown tasks, requests a flush, and marks its gRPC client closed. The separately supervised daemon is not terminated. WHITEPAPER.md also describes plugin supervision and JSON-RPC despite current connect-only gRPC transport.\n\nScope locality to local daemon/backends; describe keyword filtering and host-hook coverage accurately; clarify intentional user/global scope sharing; align CLI, shutdown, transport, and supervision documentation with the current implementation.\n\nAll 74 local Markdown link targets across README/HOOK/WHITEPAPER/CHANGELOG/docs resolved, and git diff --check passed. This doc fix does not claim to make the reply hook work on hosts that do not support it.\n\nAt upstream `c3570e1`, configuration.md claims dbPath chooses the database, embeddingRuntimePath and embeddingModelPath map to daemon environment variables, and embedding-profiles.md says onnxDevice is passed through as LIBRAVDB_ONNX_DEVICE. The plugin is connect-only: it creates LibravDBClient with endpoint, timeout, TLS, and tenant routing, and does not transmit daemon database/model configuration or set the service environment. ONNX path fields are only used for local plugin-side validation when embeddingBackend is onnx-local; profile names are discovery metadata.\n\nChanging those plugin fields therefore does not change the active database/backend/provider, and may lead operators to troubleshoot the wrong process. The RPC timeout docs also still say 30000 although plugin-runtime.ts and the manifest default to 120000.\n\nDocument separate daemon YAML/service environment configuration and the limited purpose of accepted plugin model fields, and fix the timeout default. This commit also clarifies that a positive compactThreshold overrides compactSessionTokenBudget=0, matching the related context-engine correction and its existing explicit-override test.\n\nValidated by tracing config references and client construction; no service/model changes are made by these fields. The compaction-zero wording assumes the companion context-engine fix, while retaining explicit-threshold precedence.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: unused mTLS certificate paths abort plaintext client startup",
+      "related_submission_slug": "plaintext-mtls-paths",
+      "evidence": "Plaintext endpoints currently load configured mTLS certificate files and fail startup if those unused files are missing. Load client certificate/key files only when TLS is active, matching the existing CA handling and runtime warning.\n\nValidation: the plaintext regression fails against upstream `c3570e1`; all 24 focused client tests pass with the fix. Coverage includes Unix, default loopback TCP, explicitly insecure remote TCP, and forced TLS requiring readable certificates. TypeScript test compilation passes.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: auth mutex serializes unrelated RPCs even without an auth secret",
+      "related_submission_slug": "unauthenticated-concurrency",
+      "evidence": "The auth interceptor serializes every non-health RPC even when authentication is disabled. A slow background AfterTurnKernel call then blocks an unrelated BeforeTurnKernel or search request before it reaches transport.\n\nBypass nonce serialization when there is no secret; preserve the authenticated nonce chain. A deferred-RPC regression fails on upstream and passes with the fix. The focused client suite passed 25/25, including authenticated serialization, recovery and cancellation.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: cross-tenant search hides total failure and returns unranked results beyond k",
+      "related_submission_slug": "cross-tenant-search",
+      "evidence": "When all tenant searches fail, fan-out currently returns a successful empty result. It also concatenates results in tenant order and applies `k` per tenant, so `k: 2` can return four records while lower scores precede higher ones.\n\nReject with the original error when every tenant read fails, retain partial success and successful empty responses, then rank the merged results by score and apply the requested global limit. Tenant-key restoration remains in `finally`.\n\nValidation: deterministic regressions fail on upstream for total failure and ordering/limit; the focused client suite passes 29/29 after both fixes. TypeScript test compilation and diff checks pass. The existing routing race in upstream #369 is separate.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: client close leaves its gRPC HTTP/2 connection alive",
+      "related_submission_slug": "client-session-lifecycle",
+      "evidence": "`close()` currently only changes a Boolean, leaving established HTTP/2 sessions alive until the transport's idle timeout. Authenticated requests canceled while queued also keep waiting for the nonce mutex and can enter transport later; recovery Health calls do not inherit the canceled request's signal.\n\nOwn the transport session manager and abort it on close, guard immediately before transport so queued work cannot reconnect, and make nonce-lock waits cancellable while preserving queue order. Forward cancellation into recovery handshakes.\n\nValidation: real local HTTP/2 regressions cover idle-session teardown, idempotent close, closing during Health recovery and queued work. Deferred nonce-queue regressions cover prompt abort, abandoned-slot release, and recovery cancellation. Baseline regressions fail; the independent publication branch passes all 26 client tests and TypeScript compilation. Unauthenticated concurrency is addressed by the separate unauthenticated-concurrency submission.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: canceled RPCs remain pending behind the auth lock and recovery handshake",
+      "related_submission_slug": "client-session-lifecycle",
+      "evidence": "`close()` currently only changes a Boolean, leaving established HTTP/2 sessions alive until the transport's idle timeout. Authenticated requests canceled while queued also keep waiting for the nonce mutex and can enter transport later; recovery Health calls do not inherit the canceled request's signal.\n\nOwn the transport session manager and abort it on close, guard immediately before transport so queued work cannot reconnect, and make nonce-lock waits cancellable while preserving queue order. Forward cancellation into recovery handshakes.\n\nValidation: real local HTTP/2 regressions cover idle-session teardown, idempotent close, closing during Health recovery and queued work. Deferred nonce-queue regressions cover prompt abort, abandoned-slot release, and recovery cancellation. Baseline regressions fail; the independent publication branch passes all 26 client tests and TypeScript compilation. Unauthenticated concurrency is addressed by the separate unauthenticated-concurrency submission.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: context assembly deadline leaves timers and timed-out RPCs active",
+      "related_submission_slug": "assembly-deadline",
+      "evidence": "Every AssembleContextInternal call leaves its timeout timer alive after success or failure. A local assembly deadline also returns fallback without canceling the RPC, allowing work to continue and retain the authenticated request mutex.\n\nClear the timer in `finally`, abort transport when the local deadline fires, and forward CallOptions through the client method. Two regressions fail against upstream (timer retained and missing abort signal) and pass with the fix. Type checking and all 114 context unit tests pass.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: compactSessionTokenBudget=0 still forces predictive compaction",
+      "related_submission_slug": "disable-predictive-compaction",
+      "evidence": "With compactSessionTokenBudget: 0 and no positive explicit compactThreshold, the plugin currently derives a fallback threshold and still forces predictive compaction during assemble and afterTurn. Honor the zero disable setting for those implicit triggers, while preserving the existing contract that a positive explicit compactThreshold overrides it.\n\nExplicit host/manual compaction remains available. Regression coverage verifies both implicit paths remain disabled, positive explicit threshold still compacts, and manual compaction still works. All 55 existing integration tests pass with the original explicit-override assertion intact; 121 context unit tests pass and TypeScript compilation passes.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: partial or rejected cursor acknowledgments falsely commit logical turns",
+      "related_submission_slug": "durable-turn-acks",
+      "evidence": "A partial daemon acknowledgment currently resolves ingestion successfully, so commitTurn marks the whole advancement committed and its retry skips unstored messages. Cursor-gap recovery is worse: it records every seed message even when the retry confirms zero messages, only a prefix, or another gap.\n\nPersist only the acknowledged prefix and reject incomplete ingestion to keep the advancement retryable. Persist a recoveryPending marker so a replacement engine/restart retries the full unconfirmed source suffix, including messages before the host's prePrompt boundary. Use stable, domain-separated synthetic message IDs for advancement/recovery retries when the host omits IDs. Clear the marker only after complete confirmation; retain legacy no-cursor compatibility.\n\nValidation: baseline regressions fail for partial normal ACKs and zero/partial/rejected recovery ACKs. Independent branch type checking and all 169 context/configured integration tests pass; the final identity namespace change also passes all 10 targeted ACK/commit tests. A second reviewer independently verifies exact unconfirmed suffixes, final hashes, and duplicate detection with explicit/missing IDs and replacement engines. Combined audit validation is run separately.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: engine disposal clears other sessions' recall and trigger caches",
+      "related_submission_slug": "shared-session-caches",
+      "evidence": "Post-tool recall and automated-trigger caches are shared between engine instances, but disposing one engine currently clears both maps for every session. Another active session loses its cached tool continuation and cron/heartbeat retrieval gate. Also, an unspecified new trigger leaves an earlier cron marker behind.\n\nKeep shared caches under their existing session lifecycle cleanup and bounded eviction; individual engine disposal retains other sessions' state. Clear stale markers when the new trigger is unspecified.\n\nValidation: two deterministic regressions fail on upstream; TypeScript compilation and all 120 context tests passed after the fix. This is distinct from the compacted-projection issue #378.",
+      "evidence_note": "Recovered from the reviewed PR draft. If the submission groups multiple findings, narrow the issue body to this finding."
+    },
+    {
+      "title": "bug: cross-tenant recall hits share paths and memory_get reads the wrong record",
+      "related_submission_slug": null,
+      "body_file": "cross-tenant-path-issue.md",
+      "status": "confirmed issue-only; no prepared fix"
+    }
+  ],
+  "preserved_validation": {
+    "scope": "Combined cloud review branch; historical results, not new local runs",
+    "review_commit": "aeb753e5b90c53a59280dd884b6e919cb995434b",
+    "build": "passed",
+    "typecheck": "passed",
+    "plugin_inspector": "0 breakages; 1 existing dependency-install proof gap",
+    "unit": {
+      "passed": 325,
+      "failed": 0,
+      "skipped": 0
+    },
+    "integration": {
+      "passed": 63,
+      "failed": 0,
+      "skipped": 0
+    },
+    "pack_dry_run": "passed",
+    "diff_check": "passed",
+    "limits": "No production daemon or AWS/Kubernetes deployment. Most contract tests used fake clients; HTTP/2 lifecycle tests used local servers."
+  },
+  "closed_fork_prs_note": "Fork PRs #1-30 are closed. #16 is obsolete and consolidated into #8 (empty-markdown). These historical PRs are evidence only; do not reopen them."
+}
