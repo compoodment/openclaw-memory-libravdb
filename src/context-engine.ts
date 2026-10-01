@@ -2502,6 +2502,11 @@ export function buildContextEngineFactory(
       cfg.compactSessionTokenBudget,
     );
 
+  // A zero budget disables our automatic triggers as well as the daemon's.
+  // Explicit host compact() requests still use the normal threshold below.
+  const getPredictiveCompactThreshold = (tokenBudget: number | undefined): number | undefined =>
+    cfg.compactSessionTokenBudget === 0 ? undefined : getDynamicCompactThreshold(tokenBudget);
+
   const buildAssemblyConfig = (tokenBudget: number | undefined) => ({
     useSessionRecallProjection: cfg.useSessionRecallProjection,
     useSessionSummarySearchExperiment: cfg.useSessionSummarySearchExperiment,
@@ -2870,7 +2875,7 @@ export function buildContextEngineFactory(
     currentTokenCount?: number;
     lifecycleToken: object;
   }): Promise<void> {
-    const dynamicCompactThreshold = getDynamicCompactThreshold(args.tokenBudget);
+    const dynamicCompactThreshold = getPredictiveCompactThreshold(args.tokenBudget);
     const currentContextTokens = resolveAfterTurnPredictiveCompactionTokenCount({
       currentTokenCount: args.currentTokenCount,
       messages: args.messages,
@@ -3091,7 +3096,7 @@ export function buildContextEngineFactory(
         messages,
         prompt: strippedPrompt,
       });
-      const dynamicCompactThreshold = getDynamicCompactThreshold(args.tokenBudget);
+      const dynamicCompactThreshold = getPredictiveCompactThreshold(args.tokenBudget);
       const predictiveTargetSize = resolvePredictiveCompactionTarget({
         currentTokenCount: currentContextTokens,
         threshold: dynamicCompactThreshold,
