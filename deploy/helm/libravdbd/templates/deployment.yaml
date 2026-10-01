@@ -22,7 +22,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: grpc
-              containerPort: {{ .Values.service.port }}
+              containerPort: {{ include "libravdbd.grpcPort" . }}
               protocol: TCP
           env:
             - name: LIBRAVDB_CONFIG
