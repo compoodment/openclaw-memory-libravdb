@@ -230,6 +230,33 @@ test("truncating a markdown file clears its authored content before persisting t
   }
 });
 
+test("obsidian ingestion ignores tags inside fences with embedded shorter or mismatched markers", async () => {
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "libravdb-obsidian-fences-"));
+  const filePath = path.join(tempRoot, "example.md");
+  const rpc = new FakeRpcClient();
+  const fsApi = new FakeFsApi();
+  await fsApi.writeFile(filePath, ["````markdown", "```", "#project", "~~~", "````"].join("\n"));
+  const handle = createMarkdownIngestionHandle(
+    {
+      markdownIngestionObsidianEnabled: true,
+      markdownIngestionObsidianRoots: [tempRoot],
+      markdownIngestionObsidianSnapshotPath: snapshotPath(tempRoot, "obsidian"),
+    },
+    async () => rpc as never,
+    { error() {}, warn() {}, info() {} },
+    fsApi as never,
+  );
+
+  try {
+    await handle.start();
+    assert.equal(rpc.documents.has(filePath), false);
+    assert.equal(rpc.calls.filter((call) => call.method === "ingest_markdown_document").length, 0);
+  } finally {
+    await handle.stop();
+    await fsp.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("markdown ingestion roots stay inert unless explicitly enabled", async () => {
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "libravdb-markdown-disabled-"));
   const filePath = path.join(tempRoot, "MEMORY.md");
