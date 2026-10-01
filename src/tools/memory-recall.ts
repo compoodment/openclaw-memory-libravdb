@@ -441,7 +441,7 @@ export function createMemoryGrepTool(
 
       const mode = (params.mode === "regex" ? "regex" : "text") as "regex" | "text";
       const scope = (params.scope === "messages" ? "messages" : params.scope === "summaries" ? "summaries" : "both") as "messages" | "summaries" | "both";
-      const limit = readNum(params, "limit", { integer: true }) ?? MAX_GREP_RESULTS;
+      const limit = Math.min(200, readNum(params, "limit", { integer: true }) ?? MAX_GREP_RESULTS);
       const sessionId = readStr(params, "sessionId") ?? getSessionId() ?? "";
 
       try {
@@ -450,6 +450,7 @@ export function createMemoryGrepTool(
         const turns: MemoryGrepDetails["turns"] = [];
         let totalChars = 0;
         let totalMatches = 0;
+        let truncated = false;
 
         if (scope === "summaries" || scope === "both") {
           const searchK = Math.min(limit * 3, 200);
@@ -459,8 +460,11 @@ export function createMemoryGrepTool(
             k: searchK,
           });
           for (const r of (summaryResults.results ?? [])) {
-            if (summaries.length >= limit || totalChars >= MAX_GREP_CHARS) break;
             if (!safeMatch(r.text, pattern, mode)) continue;
+            if (totalMatches >= limit || totalChars >= MAX_GREP_CHARS) {
+              truncated = true;
+              break;
+            }
             totalMatches++;
             let evictionCue: string | undefined;
             if (r.metadataJson && r.metadataJson.length > 0) {
@@ -484,8 +488,11 @@ export function createMemoryGrepTool(
             k: searchK,
           });
           for (const r of (turnResults.results ?? [])) {
-            if (turns.length >= limit || totalChars >= MAX_GREP_CHARS) break;
             if (!safeMatch(r.text, pattern, mode)) continue;
+            if (totalMatches >= limit || totalChars >= MAX_GREP_CHARS) {
+              truncated = true;
+              break;
+            }
             totalMatches++;
             const snippet = truncateSnippet(r.text);
             let role = "unknown";
@@ -507,7 +514,7 @@ export function createMemoryGrepTool(
           totalMatches,
           summaries,
           turns,
-          truncated: totalChars >= MAX_GREP_CHARS,
+          truncated,
         });
       } catch (error) {
         logger.warn?.(`memory_grep failed: ${formatError(error)}`);
