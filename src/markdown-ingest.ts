@@ -129,6 +129,8 @@ interface FileState extends MarkdownIngestionSnapshot {
   root: string;
   sourceDoc: string;
   relativePath: string;
+  /** Keeps legacy source tracking until replacement or retirement succeeds. */
+  needsRevalidation?: boolean;
 }
 
 interface GenericMarkdownSourceConfig {
@@ -839,7 +841,7 @@ class DirectoryMarkdownSourceAdapter implements MarkdownSourceAdapter {
     }
 
     const cached = this.fileStates.get(sourceDoc);
-    if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
+    if (cached && !cached.needsRevalidation && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
       return "unchanged";
     }
 
@@ -866,7 +868,7 @@ class DirectoryMarkdownSourceAdapter implements MarkdownSourceAdapter {
     }
 
     const { text, fileHash } = streamed;
-    if (cached && cached.fileHash === fileHash) {
+    if (cached && !cached.needsRevalidation && cached.fileHash === fileHash) {
       this.setFileState(sourceDoc, {
         root: rootState.root,
         sourceDoc,
@@ -1131,15 +1133,21 @@ class DirectoryMarkdownSourceAdapter implements MarkdownSourceAdapter {
 
     try {
       const parsed = JSON.parse(raw) as Partial<MarkdownSnapshotFile>;
-      if (parsed.ingestVersion !== MARKDOWN_INGEST_VERSION || parsed.hashBackend !== HASH_BACKEND || !parsed.files) {
+      const migrateLegacy = parsed.ingestVersion === 3;
+      if ((!migrateLegacy && parsed.ingestVersion !== MARKDOWN_INGEST_VERSION) || parsed.hashBackend !== HASH_BACKEND || !parsed.files) {
         return;
       }
       const configuredRoots = new Set(this.roots.map((root) => path.resolve(root)));
       for (const [sourceDoc, state] of Object.entries(parsed.files)) {
         if (isValidSnapshotState(sourceDoc, state) && configuredRoots.has(path.resolve(state.root))) {
-          this.fileStates.set(sourceDoc, state);
+          // Retain identities for missing/oversized sources while forcing both
+          // metadata and hash sentinels to revalidate present legacy content.
+          // Persist the marker so a transient failure and restart cannot turn
+          // an unconfirmed legacy entry into a synchronized version-4 entry.
+          this.fileStates.set(sourceDoc, migrateLegacy ? { ...state, needsRevalidation: true } : state);
         }
       }
+      if (migrateLegacy) this.snapshotDirty = true;
       this.logger.info?.(`[markdown-ingest] loaded ${this.fileStates.size} ${this.kind} file snapshots from ${this.snapshotPath}`);
     } catch (error) {
       this.logger.warn?.(`[markdown-ingest] failed to parse snapshot ${this.snapshotPath}: ${formatError(error)}`);
@@ -1421,7 +1429,8 @@ function isValidSnapshotState(sourceDoc: string, value: unknown): value is FileS
     typeof state.size === "number" &&
     Number.isFinite(state.size) &&
     typeof state.mtimeMs === "number" &&
-    Number.isFinite(state.mtimeMs)
+    Number.isFinite(state.mtimeMs) &&
+    (state.needsRevalidation === undefined || typeof state.needsRevalidation === "boolean")
   );
 }
 
