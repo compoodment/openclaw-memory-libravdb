@@ -194,6 +194,42 @@ function snapshotPath(tempRoot: string, kind: "generic" | "obsidian" = "generic"
   return path.join(tempRoot, `${kind}-snapshot.json`);
 }
 
+test("truncating a markdown file clears its authored content before persisting the empty snapshot", async () => {
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "libravdb-markdown-empty-"));
+  const filePath = path.join(tempRoot, "notes.md");
+  const rpc = new FakeRpcClient();
+  const fsApi = new FakeFsApi();
+  await fsApi.writeFile(filePath, "A fact that will be removed", 1);
+  const handle = createMarkdownIngestionHandle(
+    {
+      markdownIngestionEnabled: true,
+      markdownIngestionRoots: [tempRoot],
+      markdownIngestionSnapshotPath: snapshotPath(tempRoot),
+    },
+    async () => rpc as never,
+    { error() {}, warn() {}, info() {} },
+    fsApi as never,
+  );
+
+  try {
+    await handle.start();
+    assert.equal(rpc.documents.has(filePath), true);
+    await fsApi.writeFile(filePath, "", 2);
+    await handle.refresh();
+
+    assert.equal(rpc.documents.has(filePath), false);
+    assert.equal(rpc.calls.filter((call) => call.method === "delete_authored_document").length, 1);
+    const snapshot = JSON.parse(await fsp.readFile(snapshotPath(tempRoot), "utf8"));
+    assert.equal(snapshot.files[filePath].size, 0);
+
+    await handle.refresh();
+    assert.equal(rpc.calls.filter((call) => call.method === "delete_authored_document").length, 1);
+  } finally {
+    await handle.stop();
+    await fsp.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("markdown ingestion roots stay inert unless explicitly enabled", async () => {
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "libravdb-markdown-disabled-"));
   const filePath = path.join(tempRoot, "MEMORY.md");
