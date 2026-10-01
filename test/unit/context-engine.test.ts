@@ -323,7 +323,6 @@ test("zero compactSessionTokenBudget disables predictive compaction in assemble 
   const engine = buildContextEngineFactory(fakeRuntime(client), {
     userId: "fixed-user",
     compactSessionTokenBudget: 0,
-    compactThreshold: 50,
     beforeTurnEnabled: false,
   });
   const sessionId = "s1-disable-predictive-compaction";
@@ -340,6 +339,22 @@ test("zero compactSessionTokenBudget disables predictive compaction in assemble 
   assert.equal(client.calls.filter((call) => call.method === "compactSession").length, 0);
   assert.equal(client.calls.filter((call) => call.method === "assembleContextInternal").length, 1);
   assert.equal(client.calls.filter((call) => call.method === "afterTurnKernel").length, 1);
+});
+
+test("an explicit positive compactThreshold overrides zero compactSessionTokenBudget", async () => {
+  const client = new FakeClient();
+  const engine = buildContextEngineFactory(fakeRuntime(client), {
+    userId: "fixed-user",
+    compactSessionTokenBudget: 0,
+    compactThreshold: 50,
+    beforeTurnEnabled: false,
+  });
+  const sessionId = "s1-explicit-predictive-compaction-override";
+  const messages = [makeMessage("user", "hello"), makeMessage("assistant", "reply")];
+  await engine.assemble({ sessionId, messages, tokenBudget: 4000, currentTokenCount: 3000 });
+  await engine.afterTurn({ sessionId, messages, tokenBudget: 4000, runtimeContext: { currentTokenCount: 3000 } });
+  await flushIngestion(engine);
+  assert.equal(client.calls.filter((call) => call.method === "compactSession").length, 2);
 });
 
 test("zero compactSessionTokenBudget preserves explicit host and manual compaction", async () => {

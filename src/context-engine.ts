@@ -2502,10 +2502,13 @@ export function buildContextEngineFactory(
       cfg.compactSessionTokenBudget,
     );
 
-  // A zero budget disables our automatic triggers as well as the daemon's.
-  // Explicit host compact() requests still use the normal threshold below.
+  // A zero budget disables automatic triggers unless an explicit positive
+  // compactThreshold overrides it. Host compact() keeps its normal threshold.
   const getPredictiveCompactThreshold = (tokenBudget: number | undefined): number | undefined =>
-    cfg.compactSessionTokenBudget === 0 ? undefined : getDynamicCompactThreshold(tokenBudget);
+    cfg.compactSessionTokenBudget === 0 &&
+    !(typeof cfg.compactThreshold === "number" && Number.isFinite(cfg.compactThreshold) && cfg.compactThreshold > 0)
+      ? undefined
+      : getDynamicCompactThreshold(tokenBudget);
 
   const buildAssemblyConfig = (tokenBudget: number | undefined) => ({
     useSessionRecallProjection: cfg.useSessionRecallProjection,
