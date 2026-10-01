@@ -16,7 +16,9 @@ const DEFAULT_DEBOUNCE_MS = 150;
 // exists to bound walks over directories whose syscalls never return.
 const DEFAULT_WALK_TIMEOUT_MS = 60_000;
 const DEFAULT_TOKENIZER_ID = "markdown-ingest:v1";
-const MARKDOWN_INGEST_VERSION = 3;
+// Revalidate snapshots written before empty-file retirement and correct fenced
+// tag detection; their hashes can describe content that was never synchronized.
+const MARKDOWN_INGEST_VERSION = 4;
 const HASH_BACKEND = "wasm-fnv1a64";
 const STREAM_CHUNK_BYTES = 64 * 1024;
 const DEFAULT_MARKDOWN_INGEST_EXCLUDES = [

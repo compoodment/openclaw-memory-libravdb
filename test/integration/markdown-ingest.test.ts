@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { createMarkdownIngestionHandle, type FsDirentLike } from "../../src/markdown-ingest.js";
+import { hashBytes } from "../../src/markdown-hash.js";
 
 class FakeRpcClient {
   calls: Array<{ method: string; params: unknown }> = [];
@@ -193,6 +194,84 @@ function delay(ms: number): Promise<void> {
 function snapshotPath(tempRoot: string, kind: "generic" | "obsidian" = "generic"): string {
   return path.join(tempRoot, `${kind}-snapshot.json`);
 }
+
+test("version-3 poisoned empty-file snapshots are revalidated and retire stale authored content", async () => {
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "libravdb-markdown-poisoned-empty-"));
+  const filePath = path.join(tempRoot, "notes.md");
+  const rpc = new FakeRpcClient();
+  const fsApi = new FakeFsApi();
+  await fsApi.writeFile(filePath, "", 42);
+  rpc.documents.set(filePath, { text: "Previously ingested content", tokenizerId: "markdown-ingest:v1", coreDoc: true, sourceMeta: {} });
+  await fsp.writeFile(snapshotPath(tempRoot), JSON.stringify({
+    version: 1,
+    ingestVersion: 3,
+    hashBackend: "wasm-fnv1a64",
+    files: {
+      [filePath]: { root: tempRoot, sourceDoc: filePath, relativePath: "notes.md", fileHash: hashBytes(new Uint8Array()), size: 0, mtimeMs: 42 },
+    },
+  }));
+  const handle = createMarkdownIngestionHandle(
+    { markdownIngestionEnabled: true, markdownIngestionRoots: [tempRoot], markdownIngestionSnapshotPath: snapshotPath(tempRoot) },
+    async () => rpc as never,
+    { error() {}, warn() {}, info() {} },
+    fsApi as never,
+  );
+
+  try {
+    await handle.start();
+    assert.equal(rpc.documents.has(filePath), false);
+    assert.equal(rpc.calls.filter((call) => call.method === "delete_authored_document").length, 1);
+    const snapshot = JSON.parse(await fsp.readFile(snapshotPath(tempRoot), "utf8"));
+    assert.equal(snapshot.ingestVersion, 4);
+
+    await handle.refresh();
+    assert.equal(rpc.calls.filter((call) => call.method === "delete_authored_document").length, 1);
+  } finally {
+    await handle.stop();
+    await fsp.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("version-3 Obsidian snapshots are revalidated when their only tag is inside a code fence", async () => {
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "libravdb-obsidian-legacy-fence-"));
+  const filePath = path.join(tempRoot, "example.md");
+  const text = ["````markdown", "```", "#project", "````"].join("\n");
+  const rpc = new FakeRpcClient();
+  const fsApi = new FakeFsApi();
+  await fsApi.writeFile(filePath, text, 42);
+  rpc.documents.set(filePath, { text, tokenizerId: "markdown-ingest:v1", coreDoc: true, sourceMeta: {} });
+  await fsp.writeFile(snapshotPath(tempRoot, "obsidian"), JSON.stringify({
+    version: 1,
+    ingestVersion: 3,
+    hashBackend: "wasm-fnv1a64",
+    files: {
+      [filePath]: { root: tempRoot, sourceDoc: filePath, relativePath: "example.md", fileHash: hashBytes(Buffer.from(text)), size: Buffer.byteLength(text), mtimeMs: 42 },
+    },
+  }));
+  const handle = createMarkdownIngestionHandle(
+    {
+      markdownIngestionObsidianEnabled: true,
+      markdownIngestionObsidianRoots: [tempRoot],
+      markdownIngestionObsidianSnapshotPath: snapshotPath(tempRoot, "obsidian"),
+    },
+    async () => rpc as never,
+    { error() {}, warn() {}, info() {} },
+    fsApi as never,
+  );
+
+  try {
+    await handle.start();
+    assert.equal(rpc.documents.has(filePath), false);
+    assert.equal(rpc.calls.filter((call) => call.method === "ingest_markdown_document").length, 0);
+    assert.equal(rpc.calls.filter((call) => call.method === "delete_authored_document").length, 1);
+    const snapshot = JSON.parse(await fsp.readFile(snapshotPath(tempRoot, "obsidian"), "utf8"));
+    assert.equal(snapshot.ingestVersion, 4);
+    assert.equal(snapshot.files[filePath], undefined);
+  } finally {
+    await handle.stop();
+    await fsp.rm(tempRoot, { recursive: true, force: true });
+  }
+});
 
 test("truncating a markdown file clears its authored content before persisting the empty snapshot", async () => {
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "libravdb-markdown-empty-"));
