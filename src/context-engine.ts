@@ -2017,13 +2017,16 @@ const triggerCache = new Map<string, string>();
 const TRIGGER_CACHE_MAX_SIZE = 200;
 
 export function setSessionTrigger(sessionId: string, trigger: string | undefined): void {
+  if (trigger == null) {
+    triggerCache.delete(sessionId);
+    return;
+  }
+  triggerCache.delete(sessionId);
   if (triggerCache.size >= TRIGGER_CACHE_MAX_SIZE) {
     const oldest = triggerCache.keys().next().value;
     if (oldest !== undefined) triggerCache.delete(oldest);
   }
-  if (trigger !== undefined && trigger !== null) {
-    triggerCache.set(sessionId, trigger);
-  }
+  triggerCache.set(sessionId, trigger);
 }
 
 export function clearSessionTrigger(sessionId: string): void {
@@ -4128,8 +4131,9 @@ export function buildContextEngineFactory(
         }
       }
       predictiveContextCache.clear();
-      postToolRecallCache.clear();
-      triggerCache.clear();
+      // These session-scoped caches are shared across factories. Bootstrap,
+      // reset/end hooks, and bounded eviction own their lifetime; disposing
+      // one logical turn must not invalidate other sessions' live state.
       excludedSubagentKeys.clear();
       excludedSessionIds.clear();
     },
