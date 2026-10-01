@@ -439,22 +439,25 @@ Use [Install](./docs/install.md) for service lifecycle commands and
 ## Configuration
 
 All keys are optional. For the full reference, see [Configuration](./docs/configuration.md).
+The plugin connects to an independently configured daemon. Its embedding fields
+do not provision models or change daemon backend settings; configure those in
+the daemon's YAML or service environment.
 
 | Key | Type | Default | |
 |---|---|---|---|
 | `sidecarPath` | string | `auto` | `"auto"` probes standard paths; set `unix:/path` or `tcp:host:port` to override |
-| `embeddingBackend` | string | `gguf` | Embedding backend: `gguf` (recommended), `bundled`, `onnx-local`, `custom-local`, `remote` |
+| `embeddingBackend` | string | — | Legacy backend metadata/validation field; daemon backend selection is configured separately |
 | `embeddingProfile` | string | `nomic-embed-text-v1.5` | Primary embedding model |
 | `fallbackProfile` | string | `bge-small-en-v1.5` | Fallback profile for dimension mismatches |
 | `embeddingRuntimePath` | string | — | Required with `embeddingBackend: "onnx-local"`; path to `libonnxruntime` visible to `libravdbd` |
 | `embeddingModelPath` | string | — | Required with `embeddingBackend: "onnx-local"`; directory containing `embedding.json`, `model.onnx`, and `tokenizer.json` |
-| `onnxDevice` | string | `cpu` | ONNX execution provider; `cpu` is the default; `auto` lets libravdbd auto-detect |
+| `onnxDevice` | string | `cpu` | Accepted schema field; set the actual execution provider on the daemon |
 | `userId` | string | auto-derived | Stable identity for cross-session durable memory |
 | `tenantId` | string | auto-derived | Multi-tenant identifier. Resolved as `cfg.tenantId` > `LIBRAVDB_AGENT_ID` env > `userId`. Isolates the agent to a dedicated `.libravdb` file. |
 | `tenantIdByAgent` | object | — | Per-agent tenant map. String = primary only. Object = `{primary, readAccess?: []}` for cross-tenant search. Unlisted agents fall through to `tenantId` → `userId`. |
 | `maxRules` | number | 20 | Max hard constraint rules. Set to 0 to disable rules entirely. |
 | `crossSessionRecall` | boolean | `true` | When `false`, only session-scoped memories are retrieved |
-| `compactSessionTokenBudget` | number | `2000` | Auto-compaction token threshold; `0` disables |
+| `compactSessionTokenBudget` | number | `2000` | Auto-compaction budget; `0` disables implicit predictive compaction, unless a positive `compactThreshold` overrides it |
 
 ## Multi-Tenant Support
 
