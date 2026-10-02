@@ -97,6 +97,13 @@ address, explicitly set `grpcEndpointTlsMode: "tls"` to match:
 
 ## Retrieval
 
+Memory search paths include the source tenant, collection, and record ID. Pass a
+returned path to `libravdb_memory_get` for its cached text, or copy its `recordId`
+or `path` into `memory_expand.record_id` to expand its graph in the source tenant.
+Connected graph records retain that tenant for follow-up expansion. References
+do not grant access: expansion checks the client's current primary tenant and
+configured `readAccess`. Bare record IDs continue to use the current tenant.
+
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `topK` | number | — | Max results per search |

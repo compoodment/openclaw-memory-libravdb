@@ -5,6 +5,7 @@ import { resolveIdentity } from "./identity.js";
 import { detectDreamQuerySignal, resolveDreamCollection } from "./dream-routing.js";
 import type { PluginConfig, LoggerLike } from "./types.js";
 import type { SearchResult as ProtoSearchResult } from "@xdarkicex/libravdb-contracts";
+import { searchResultKey, searchResultPath, type RoutedSearchResult } from "./record-reference.js";
 
 type MemorySearchParams = {
   query?: string;
@@ -157,6 +158,7 @@ function createMemorySearchManager(
           ...item,
           text,
           content: text,
+          ...((item as RoutedSearchResult).sourceTenant === undefined ? {} : { recordId: searchResultPath(item) }),
         };
       });
       if (legacyCall) {
@@ -164,8 +166,7 @@ function createMemorySearchManager(
       }
       const memoryResults = filteredResults.map((item) => {
         const meta = parseMetadataJson(item);
-        const collection = typeof meta.collection === "string" ? meta.collection : "memory";
-        const relPath = encodeSearchResultPath(collection, item.id);
+        const relPath = searchResultPath(item);
         const text = resolveSearchResultText(item, meta);
         returnedSearchPaths.set(relPath, text);
         return toMemorySearchResult(item, meta, text);
@@ -257,8 +258,9 @@ function mergeSearchResults(
     .flatMap((response) => response.results)
     .sort((left, right) => right.score - left.score)
     .filter((item) => {
-      if (seenIds.has(item.id)) return false;
-      seenIds.add(item.id);
+      const key = searchResultKey(item);
+      if (seenIds.has(key)) return false;
+      seenIds.add(key);
       return true;
     })
     .slice(0, limit);
@@ -343,24 +345,21 @@ function resolveSearchResultText(
 }
 
 function toMemorySearchResult(
-  item: ProtoSearchResult,
+  item: RoutedSearchResult,
   meta: Record<string, unknown> = parseMetadataJson(item),
   text = resolveSearchResultText(item, meta),
 ) {
   const collection = typeof meta.collection === "string" ? meta.collection : "memory";
   return {
-    path: encodeSearchResultPath(collection, item.id),
+    path: searchResultPath(item),
+    ...(item.sourceTenant === undefined ? {} : { recordId: searchResultPath(item) }),
     startLine: 1,
     endLine: Math.max(1, text.split("\n").length),
     score: item.score,
     snippet: text,
     source: collection.startsWith("session:") || collection.startsWith("session_") ? "sessions" : "memory",
-    citation: `${collection}:${item.id}`,
+    citation: item.sourceTenant === undefined ? `${collection}:${item.id}` : searchResultPath(item),
   };
-}
-
-function encodeSearchResultPath(collection: string, id: string): string {
-  return `${encodeURIComponent(collection)}::${encodeURIComponent(id)}`;
 }
 
 async function readStatus(

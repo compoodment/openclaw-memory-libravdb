@@ -7,6 +7,7 @@ import { createHmac } from "node:crypto";
 import fs from "node:fs";
 import type { LoggerLike } from "./types.js";
 import { formatError } from "./format-error.js";
+import { decodeRecordReference, encodeRecordReference, searchResultKey, type RoutedSearchResult } from "./record-reference.js";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -297,7 +298,14 @@ export class LibravDBClient {
       if (self.tenantKey && !req.header.has("libravdb-tenant-key")) {
         req.header.set("libravdb-tenant-key", self.tenantKey);
       }
-      return next(req);
+      const tenant = req.header.get("libravdb-tenant-key") ?? "";
+      const response = await next(req);
+      if (!response.stream && (req.method.name === "SearchText" || req.method.name === "SearchTextCollections")) {
+        for (const item of (response.message as SearchTextResponse).results) {
+          (item as RoutedSearchResult).sourceTenant = tenant;
+        }
+      }
+      return response;
     });
     interceptors.push(authInterceptor);
 
@@ -460,7 +468,7 @@ export class LibravDBClient {
         });
         succeeded = true;
         for (const r of resp.results ?? []) {
-          const dedupeKey = `${t}\0${r.id}`;
+          const dedupeKey = searchResultKey(r, t);
           if (!seen.has(dedupeKey)) {
             seen.add(dedupeKey);
             allResults.push(r);
@@ -561,7 +569,25 @@ export class LibravDBClient {
     req: PartialMessage<ExpandSummaryRequest>,
   ): Promise<ExpandSummaryResponse> {
     this.guardOpen();
-    return this.client.expandSummary(req);
+    const reference = req.recordId ? decodeRecordReference(req.recordId) : undefined;
+    const tenant = reference?.tenant;
+    if (tenant !== undefined && tenant !== (this.tenantKey ?? "") && (!tenant || !this.readTenants.includes(tenant))) {
+      throw new Error("Record reference tenant is outside configured read access");
+    }
+    const response = await this.client.expandSummary(
+      reference ? { ...req, recordId: reference.id } : req,
+      tenant ? { headers: { "libravdb-tenant-key": tenant } } : undefined,
+    );
+    if (reference) {
+      // Graph edges stay within the source tenant. Their collections are not
+      // present in this response, so leave that component empty.
+      const edgeReference = (id: string) => encodeRecordReference(reference.tenant, "", id);
+      for (const edge of response.connected) edge.recordId = edgeReference(edge.recordId);
+      response.whyIds = response.whyIds.map(edgeReference);
+      response.howIds = response.howIds.map(edgeReference);
+      response.hopTargets = response.hopTargets.map(edgeReference);
+    }
+    return response;
   }
 
   async rankCandidates(

@@ -93,7 +93,7 @@ const MEMORY_EXPAND_SCHEMA = {
     },
     record_id: {
       type: "string",
-      description: "Record ID for causal graph traversal. Use exact IDs from libravdb_memory_search or libravdb_memory_get results.",
+      description: "Record reference for causal graph traversal. Copy recordId or path from libravdb_memory_search (or a connected edge's recordId) to retain its source tenant. Bare IDs use the current tenant.",
     },
     maxDepth: {
       type: "number",
@@ -275,7 +275,7 @@ export function createMemoryExpandTool(
       "Expand compacted summaries OR walk causal graph edges from ANY record. " +
       "Summary mode (summaryIds): walk the summary tree up to maxDepth levels. " +
       "Graph mode (record_id): walk causal edges (why_ids/how_ids/hop_targets) " +
-      "from a record ID. Use exact IDs from libravdb_memory_search or libravdb_memory_get results — " +
+      "from a record ID. Copy recordId or path from libravdb_memory_search to preserve the source tenant — " +
       "any ingested turn, memory, or summary has graph edges. " +
       "For large expansions, spawns a sub-agent. " +
       "Use memory_describe first to check if expansion is warranted.",
