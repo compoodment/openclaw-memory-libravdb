@@ -150,6 +150,9 @@ The plugin exposes `ingestionGateThreshold` for host-side gating decisions:
 
 ## Markdown ingestion
 
+Unicode characters, including emoji and supplementary CJK ideographs, are
+preserved when large Markdown files are split into chunks for ingestion.
+
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `markdownIngestionEnabled` | boolean | `false` | Watch markdown roots for changes |
