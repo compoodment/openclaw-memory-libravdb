@@ -1,11 +1,16 @@
 import { LibravDBClient, resolveClientEndpoint } from "./libravdb-client.js";
 import type { LoggerLike, PluginConfig } from "./types.js";
 import { formatError } from "./format-error.js";
-import { resolveTenantKey } from "./identity.js";
+import { resolveTenantKey, resolveReadTenants } from "./identity.js";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 
-export type ClientGetter = () => Promise<LibravDBClient>;
+export interface ClientScope {
+  agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+}
+export type ClientGetter = (scope?: ClientScope) => Promise<LibravDBClient>;
 export const DEFAULT_RPC_TIMEOUT_MS = 120_000;
 export const STARTUP_HEALTH_TIMEOUT_MS = 2000;
 const ENV_RPC_TIMEOUT_MS = (() => {
@@ -86,18 +91,30 @@ export function createPluginRuntime(
   cfg: PluginConfig,
   logger: LoggerLike = console,
 ): PluginRuntime {
-  let started: Promise<LibravDBClient> | null = null;
+  const started = new Map<string, Promise<LibravDBClient>>();
+  // Some host callbacks omit sessionKey. Keep their last explicit agent binding
+  // through session-end: already queued ingestion can still need it afterward.
+  const sessionAgents = new Map<string, string>();
   let stopped = false;
   let shuttingDown = false;
   const shutdownTasks: RuntimeShutdownTask[] = [];
 
-  const ensureStarted = async (): Promise<LibravDBClient> => {
+  const ensureStarted = async (scope: ClientScope = {}): Promise<LibravDBClient> => {
     if (stopped) {
       throw new Error("LibraVDB plugin runtime has been shut down");
     }
-    if (!started) {
+    let agentId = scope.agentId?.trim() || /^agent:([^:]+):/.exec(scope.sessionKey ?? "")?.[1];
+    if (scope.sessionId) {
+      if (agentId) sessionAgents.set(scope.sessionId, agentId);
+      else agentId = sessionAgents.get(scope.sessionId);
+    }
+    const tenantKey = resolveTenantKey(cfg, agentId);
+    const readTenants = resolveReadTenants(cfg, agentId) ?? [];
+    const key = JSON.stringify([tenantKey, readTenants]);
+    let pending = started.get(key);
+    if (!pending) {
       let client: LibravDBClient | undefined;
-      started = (async () => {
+      pending = (async () => {
         validateEmbeddingConfig(cfg);
         validateTlsConfig(cfg, logger);
 
@@ -108,27 +125,29 @@ export function createPluginRuntime(
           tlsMode: cfg.grpcEndpointTlsMode,
           tlsClientCertPath: cfg.grpcEndpointTlsClientCert,
           tlsClientKeyPath: cfg.grpcEndpointTlsClientKey,
-          tenantKey: resolveTenantKey(cfg),
+          tenantKey,
         });
+        client.setReadTenants(readTenants);
 
         await client.bootstrapHandshake();
         return client;
       })().catch((error) => {
-        started = null;
+        started.delete(key);
         client?.close();
         throw enrichStartupError(error);
       });
+      started.set(key, pending);
     }
-    return await started;
+    return await pending;
   };
 
   return {
-    async getClient() {
-      return await ensureStarted();
+    async getClient(scope) {
+      return await ensureStarted(scope);
     },
     async emitLifecycleHint(hint: LifecycleHint) {
       try {
-        const client = await ensureStarted();
+        const client = await ensureStarted(hint);
         await client.sessionLifecycleHint(hint);
       } catch (error) {
         logger.warn?.(`LibraVDB lifecycle hint dropped: ${formatError(error)}`);
@@ -155,23 +174,23 @@ export function createPluginRuntime(
       }
 
       stopped = true;
-      if (!started) {
-        return;
-      }
-      const client = started;
-      started = null;
-      try {
-        const resolved = await client;
+      const clients = [...started.values()];
+      started.clear();
+      sessionAgents.clear();
+      await Promise.all(clients.map(async (client) => {
         try {
-          await resolved.flush({});
-        } catch (error) {
-          logger.warn?.(`LibraVDB flush failed during shutdown: ${formatError(error)}`);
-        } finally {
-          resolved.close();
+          const resolved = await client;
+          try {
+            await resolved.flush({});
+          } catch (error) {
+            logger.warn?.(`LibraVDB flush failed during shutdown: ${formatError(error)}`);
+          } finally {
+            resolved.close();
+          }
+        } catch {
+          // startup may have failed before client resolution; nothing to flush or close
         }
-      } catch {
-        // startup may have failed before client resolution; nothing to flush or close
-      }
+      }));
     },
   };
 }
