@@ -165,6 +165,10 @@ The plugin exposes `ingestionGateThreshold` for host-side gating decisions:
 | `markdownIngestionSnapshotPath` | string | — | Path to snapshot file for generic markdown ingestion state |
 | `markdownIngestionObsidianSnapshotPath` | string | — | Path to snapshot file for Obsidian ingestion state |
 
+Updates and deletes for the same source document run in order across roots and
+adapters sharing a client. A replacement's APPEND chunks finish before another
+replacement or deletion begins; unrelated documents can still progress in parallel.
+
 Configured markdown roots are ignored unless the matching enable flag is set to
 `true`. Set `markdownIngestionEnabled: true` for generic roots and
 `markdownIngestionObsidianEnabled: true` for Obsidian vault roots.
