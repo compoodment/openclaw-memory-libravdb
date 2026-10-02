@@ -218,21 +218,19 @@ test("memory runtime bridge falls back to session-scoped namespace when no other
   assert.equal(collections[2], "global");
 });
 
-test("memory runtime bridge keeps the legacy string search shape", async () => {
+test("memory runtime bridge uses the host array shape for string searches", async () => {
   const rpc = new FakeRpc();
   const runtime = buildMemoryRuntimeBridge(async () => rpc as never, {});
   const { manager } = await runtime.getMemorySearchManager();
 
-  const result = await manager.search("find prior context", { sessionKey: "fixed-session" }) as {
-    results: Array<{ content: string }>;
-  };
+  const result = await manager.search("find prior context", { sessionKey: "fixed-session" });
 
-  assert.equal(Array.isArray(result), false);
-  assert.equal(result.results.length, 1);
-  assert.equal(result.results[0]?.content, "remembered item");
+  assert.ok(Array.isArray(result));
+  assert.equal(result.length, 1);
+  assert.equal(result[0]?.snippet, "remembered item");
 });
 
-test("legacy memory searches apply kind and signal filters like structured searches", async (t) => {
+test("string memory searches apply kind and signal filters like structured searches", async (t) => {
   const records = [
     { id: "factual-episode", text: "a factual episode", score: 0.95, kind: "episode", signals: ["factual"] },
     { id: "temporal-fact", text: "a temporal fact", score: 0.9, kind: "fact", signals: ["temporal"] },
@@ -259,10 +257,10 @@ test("legacy memory searches apply kind and signal filters like structured searc
         const searchOptions = { userId: "u1", limit: 8, ...options };
 
         const structured = await manager.search({ query, ...searchOptions }) as Array<{ snippet: string }>;
-        const legacy = await manager.search(query, searchOptions) as { results: Array<{ id: string; text: string }> };
+        const native = await manager.search(query, searchOptions);
 
-        assert.deepEqual(legacy.results.map((record) => record.id), expected, `${query}: legacy result scope must honor both filter options`);
-        assert.deepEqual(legacy.results.map((record) => record.text), structured.map((record) => record.snippet), `${query}: both API shapes must retrieve the same filtered memories`);
+        assert.deepEqual(native.map((record) => record.snippet), records.filter((record) => expected.includes(record.id)).map((record) => record.text), `${query}: string result scope must honor both filter options`);
+        assert.deepEqual(native.map((record) => record.snippet), structured.map((record) => record.snippet), `${query}: both API shapes must retrieve the same filtered memories`);
       });
     }
   }
@@ -333,7 +331,7 @@ test("memory runtime bridge treats non-object metadata JSON as missing", async (
   assert.equal(result[0]?.source, "memory");
 });
 
-test("memory runtime bridge does not authorize hidden paths from legacy search results", async () => {
+test("memory runtime bridge does not authorize unreturned paths after string searches", async () => {
   const rpc = new FakeRpc();
   const runtime = buildMemoryRuntimeBridge(async () => rpc as never, {});
   const { manager } = await runtime.getMemorySearchManager();
@@ -347,7 +345,7 @@ test("memory runtime bridge does not authorize hidden paths from legacy search r
   assert.equal(
     rpc.calls.some((call) => call.method === "listCollection"),
     false,
-    "legacy searches should not authorize paths they did not return",
+    "string searches should not authorize paths they did not return",
   );
 });
 
