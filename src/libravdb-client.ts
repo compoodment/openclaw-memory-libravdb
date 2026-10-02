@@ -294,7 +294,7 @@ export class LibravDBClient {
 
     const interceptors: Interceptor[] = [];
     interceptors.push((next) => async (req) => {
-      if (self.tenantKey) {
+      if (self.tenantKey && !req.header.has("libravdb-tenant-key")) {
         req.header.set("libravdb-tenant-key", self.tenantKey);
       }
       return next(req);
@@ -352,8 +352,8 @@ export class LibravDBClient {
     }
   }
 
-  /** Update the tenant key for subsequent gRPC calls. Thread-safe —
-   *  the interceptor reads this.tenantKey on every request. */
+  /** Update the default tenant for subsequent gRPC calls.
+   *  This does not bind queued application work to a particular agent. */
   setTenantKey(key: string): void {
     this.tenantKey = key;
   }
@@ -361,7 +361,7 @@ export class LibravDBClient {
   /** Set additional tenants to search across. Only used by searchTextCollections.
    *  Empty by default — zero overhead for single-tenant setups. */
   setReadTenants(tenants: string[]): void {
-    this.readTenants = tenants;
+    this.readTenants = [...tenants];
   }
 
   // ── Session lifecycle ────────────────────────────────────────────
@@ -446,32 +446,29 @@ export class LibravDBClient {
     if (this.readTenants.length === 0) {
       return this.client.searchTextCollections(req);
     }
-    // Multi-tenant fan-out: search across all read tenants, merge results.
-    // Temporarily swap tenantKey per call, restore after.
-    const savedKey = this.tenantKey;
+    // Fan-out must not retarget concurrent writes or restore a stale default.
+    // Bind the tenant to each read request and snapshot this search's access list.
+    const readTenants = [...this.readTenants];
     const allResults: SearchTextResponse["results"] = [];
     const seen = new Set<string>();
     let succeeded = false;
     let firstError: unknown;
-    try {
-      for (const t of this.readTenants) {
-        this.tenantKey = t;
-        try {
-          const resp = await this.client.searchTextCollections(req);
-          succeeded = true;
-          for (const r of resp.results ?? []) {
-            const dedupeKey = `${t}\0${r.id}`;
-            if (!seen.has(dedupeKey)) {
-              seen.add(dedupeKey);
-              allResults.push(r);
-            }
+    for (const t of readTenants) {
+      try {
+        const resp = await this.client.searchTextCollections(req, {
+          headers: { "libravdb-tenant-key": t },
+        });
+        succeeded = true;
+        for (const r of resp.results ?? []) {
+          const dedupeKey = `${t}\0${r.id}`;
+          if (!seen.has(dedupeKey)) {
+            seen.add(dedupeKey);
+            allResults.push(r);
           }
-        } catch (error) {
-          firstError ??= error;
         }
+      } catch (error) {
+        firstError ??= error;
       }
-    } finally {
-      this.tenantKey = savedKey;
     }
     if (!succeeded) {
       throw firstError;

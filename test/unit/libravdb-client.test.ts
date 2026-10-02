@@ -15,6 +15,7 @@ import {
 } from "../../src/libravdb-client.js";
 
 import type { AuthInterceptorState } from "../../src/libravdb-client.js";
+import type { CallOptions } from "@connectrpc/connect";
 
 async function withLegacyJsonRpcSocket(run: (endpoint: string) => Promise<void>): Promise<void> {
   const dir = mkdtempSync(path.join(tmpdir(), "libravdb-legacy-jsonrpc-"));
@@ -408,12 +409,12 @@ test("loadSecretFromEnv warns and returns undefined for unreadable file", () => 
 test("cross-tenant search keeps same record ids from different tenants", async () => {
   const client = new LibravDBClient({ endpoint: "tcp:127.0.0.1:9" });
   (client as any).client = {
-    searchTextCollections: async () => ({
+    searchTextCollections: async (_req: unknown, options?: CallOptions) => ({
       results: [
         {
           id: "shared-id",
           score: 0.9,
-          text: `hit from ${(client as any).tenantKey}`,
+          text: `hit from ${new Headers(options?.headers).get("libravdb-tenant-key")}`,
         },
       ],
     }),
@@ -451,8 +452,8 @@ test("cross-tenant search rejects when every tenant read fails", async () => {
 test("cross-tenant search preserves successful reads when another tenant fails", async () => {
   const client = new LibravDBClient({ endpoint: "tcp:127.0.0.1:9" });
   (client as any).client = {
-    searchTextCollections: async () => {
-      if ((client as any).tenantKey === "failed") throw new Error("permission denied");
+    searchTextCollections: async (_req: unknown, options?: CallOptions) => {
+      if (new Headers(options?.headers).get("libravdb-tenant-key") === "failed") throw new Error("permission denied");
       return { results: [{ id: "hit", text: "available", score: 0.9 }] };
     },
   };
@@ -466,8 +467,8 @@ test("cross-tenant search preserves successful reads when another tenant fails",
 test("cross-tenant search treats a successful empty read as an empty search", async () => {
   const client = new LibravDBClient({ endpoint: "tcp:127.0.0.1:9" });
   (client as any).client = {
-    searchTextCollections: async () => {
-      if ((client as any).tenantKey === "failed") throw new Error("permission denied");
+    searchTextCollections: async (_req: unknown, options?: CallOptions) => {
+      if (new Headers(options?.headers).get("libravdb-tenant-key") === "failed") throw new Error("permission denied");
       return { results: [] };
     },
   };
@@ -478,8 +479,8 @@ test("cross-tenant search treats a successful empty read as an empty search", as
 test("cross-tenant search ranks globally and applies k after merging", async () => {
   const client = new LibravDBClient({ endpoint: "tcp:127.0.0.1:9" });
   (client as any).client = {
-    searchTextCollections: async () => ({
-      results: (client as any).tenantKey === "tenant-a"
+    searchTextCollections: async (_req: unknown, options?: CallOptions) => ({
+      results: new Headers(options?.headers).get("libravdb-tenant-key") === "tenant-a"
         ? [{ id: "a1", score: 0.6 }, { id: "a2", score: 0.5 }]
         : [{ id: "b1", score: 0.9 }, { id: "b2", score: 0.8 }],
     }),
