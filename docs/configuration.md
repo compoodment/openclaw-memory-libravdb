@@ -207,6 +207,9 @@ and recency-adjusted scoring pass that runs after the initial vector search.
 
 ## Dream promotion
 
+Diary edits received during an in-flight promotion are scanned after it finishes,
+including when that promotion fails. Stopping the watcher cancels pending scans.
+
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `dreamPromotionEnabled` | boolean | `false` | Enable dream diary promotion |
