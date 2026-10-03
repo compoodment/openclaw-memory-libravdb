@@ -843,6 +843,10 @@ class DirectoryMarkdownSourceAdapter implements MarkdownSourceAdapter {
     }
     for (const filePath of removed) {
       await this.coordinator.run(filePath, async () => {
+        // Another overlapping root may have validated this file after our
+        // directory walk. Its current document must survive our stale absence.
+        const cached = this.fileStates.get(filePath);
+        if (cached && cached.root !== rootState.root) return;
         await this.deleteSourceDocument(filePath);
         this.fileStates.delete(filePath);
         this.snapshotDirty = true;
@@ -884,6 +888,9 @@ class DirectoryMarkdownSourceAdapter implements MarkdownSourceAdapter {
 
     const cached = this.fileStates.get(sourceDoc);
     if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
+      if (cached.root !== rootState.root) {
+        this.setFileState(sourceDoc, { ...cached, root: rootState.root, relativePath });
+      }
       return "unchanged";
     }
 

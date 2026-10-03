@@ -186,6 +186,98 @@ class FakeFsApi {
   }
 }
 
+test("a cached file accepted by a nested root survives its former root's exclusion", async t => {
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "libravdb-root-ownership-"));
+  const parent = path.join(tempRoot, "docs");
+  const child = path.join(parent, "nested");
+  const file = path.join(child, "note.md");
+  const fsApi = new FakeFsApi();
+  const rpc = new FakeRpcClient();
+  await fsApi.writeFile(file, "A note retained through the nested root", 1000);
+  const makeHandle = (roots: string[], exclude?: string[]) => createMarkdownIngestionHandle({
+    markdownIngestionEnabled: true,
+    markdownIngestionRoots: roots,
+    markdownIngestionExclude: exclude,
+    markdownIngestionSnapshotPath: snapshotPath(tempRoot),
+  }, async () => rpc as never, { info() {}, warn() {}, error() {} }, fsApi);
+  let handle = makeHandle([parent]);
+  t.after(async () => { await handle.stop(); await fsp.rm(tempRoot, { recursive: true, force: true }); });
+  await handle.start();
+  await handle.stop();
+  rpc.calls.length = 0;
+  handle = makeHandle([child, parent], ["nested/**"]);
+  await handle.start();
+  assert.equal(rpc.documents.get(file)?.text, "A note retained through the nested root");
+  assert.equal(rpc.calls.length, 0, "a cached file still selected by another root needs neither delete nor reingest");
+  await handle.stop();
+  handle = makeHandle([child, parent], ["nested/**"]);
+  await handle.start();
+  assert.equal(rpc.calls.length, 0, "the selected root must also survive snapshot reload");
+  await fsApi.rm(file);
+  await handle.refresh();
+  assert.equal(rpc.documents.has(file), false, "actual deletion must still retire the document");
+});
+
+test("a stale parent scan does not prune a replacement already ingested by its nested root", { timeout: 5000 }, async t => {
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "libravdb-root-prune-race-"));
+  const parent = path.join(tempRoot, "docs");
+  const child = path.join(parent, "nested");
+  const file = path.join(child, "note.md");
+  const sibling = path.join(parent, "sibling.md");
+  const fsApi = new FakeFsApi();
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  let started!: () => void;
+  const siblingStarted = new Promise<void>(resolve => { started = resolve; });
+  let blockSibling = false;
+  class BlockedSiblingClient extends FakeRpcClient {
+    override async ingestMarkdownDocument(params: Parameters<FakeRpcClient["ingestMarkdownDocument"]>[0]) {
+      const result = await super.ingestMarkdownDocument(params);
+      if (blockSibling && params.sourceDoc === sibling) {
+        started();
+        await blocked;
+      }
+      return result;
+    }
+  }
+  const rpc = new BlockedSiblingClient();
+  await fsApi.writeFile(file, "Original note", 1000);
+  await fsApi.writeFile(sibling, "Original sibling", 1000);
+  const handle = createMarkdownIngestionHandle({
+    markdownIngestionEnabled: true,
+    markdownIngestionRoots: [parent, child],
+    markdownIngestionDebounceMs: 60_000,
+    markdownIngestionSnapshotPath: snapshotPath(tempRoot),
+  }, async () => rpc as never, { info() {}, warn() {}, error() {} }, fsApi);
+  let parentRefresh: Promise<void> | undefined;
+  t.after(async () => {
+    release();
+    await parentRefresh;
+    await handle.stop();
+    await fsp.rm(tempRoot, { recursive: true, force: true });
+  });
+  await handle.start();
+  // The parent observes the note absent, then waits on an unrelated write.
+  await fsApi.rm(file);
+  await fsApi.writeFile(sibling, "Changed sibling", 2000);
+  blockSibling = true;
+  parentRefresh = handle.refresh();
+  await siblingStarted;
+  // A concurrent refresh reaches the child while the parent is still busy.
+  await fsApi.writeFile(file, "Replacement note", 3000);
+  await handle.refresh();
+  assert.equal(rpc.documents.get(file)?.text, "Replacement note");
+  release();
+  await parentRefresh;
+  assert.equal(rpc.calls.filter(call => call.method === "delete_authored_document"
+    && (call.params as { sourceDoc: string }).sourceDoc === file).length, 0,
+  "the parent's stale absence must not delete the child's replacement");
+  assert.equal(rpc.documents.get(file)?.text, "Replacement note");
+  await fsApi.rm(file);
+  await handle.refresh();
+  assert.equal(rpc.documents.has(file), false);
+});
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
