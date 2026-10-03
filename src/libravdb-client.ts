@@ -569,13 +569,26 @@ export class LibravDBClient {
     req: PartialMessage<ExpandSummaryRequest>,
   ): Promise<ExpandSummaryResponse> {
     this.guardOpen();
-    const reference = req.recordId ? decodeRecordReference(req.recordId) : undefined;
+    const graphMode = Boolean(req.recordId);
+    const reference = decodeRecordReference((graphMode ? req.recordId : req.summaryId) ?? "");
     const tenant = reference?.tenant;
     if (tenant !== undefined && tenant !== (this.tenantKey ?? "") && (!tenant || !this.readTenants.includes(tenant))) {
       throw new Error("Record reference tenant is outside configured read access");
     }
+    let routed = req;
+    if (reference) {
+      if (graphMode) {
+        routed = { ...req, recordId: reference.id };
+      } else {
+        const prefix = "session_summary:";
+        if (!reference.collection.startsWith(prefix) || reference.collection.length === prefix.length) {
+          throw new Error("Summary reference must identify a session_summary collection");
+        }
+        routed = { ...req, summaryId: reference.id, sessionId: reference.collection.slice(prefix.length) };
+      }
+    }
     const response = await this.client.expandSummary(
-      reference ? { ...req, recordId: reference.id } : req,
+      routed,
       tenant ? { headers: { "libravdb-tenant-key": tenant } } : undefined,
     );
     if (reference) {
@@ -586,6 +599,25 @@ export class LibravDBClient {
       response.whyIds = response.whyIds.map(edgeReference);
       response.howIds = response.howIds.map(edgeReference);
       response.hopTargets = response.hopTargets.map(edgeReference);
+      if (!graphMode) {
+        const summaryReference = (id: string) => encodeRecordReference(reference.tenant, reference.collection, id);
+        response.summaryId = summaryReference(response.summaryId || reference.id);
+        try {
+          const meta = JSON.parse(new TextDecoder().decode(response.metadataJson));
+          const lineage = meta?.continuity_lineage;
+          if (lineage && typeof lineage === "object" && !Array.isArray(lineage)) {
+            for (const [key, qualify] of [
+              ["parent_summary_ids", summaryReference],
+              ["source_turn_ids", edgeReference],
+            ] as const) {
+              if (Array.isArray(lineage[key])) {
+                lineage[key] = lineage[key].map((id: unknown) => typeof id === "string" ? qualify(id) : id);
+              }
+            }
+            response.metadataJson = new TextEncoder().encode(JSON.stringify(meta));
+          }
+        } catch { /* Preserve opaque metadata if it cannot be decoded. */ }
+      }
     }
     return response;
   }

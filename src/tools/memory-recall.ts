@@ -2,6 +2,7 @@ import type { ClientGetter } from "../plugin-runtime.js";
 import { formatError } from "../format-error.js";
 import type { LoggerLike } from "../types.js";
 import { consumeSubagentBudget } from "../context-engine.js";
+import { encodeRecordReference, type RoutedSearchResult } from "../record-reference.js";
 
 // ── Tool types ──
 
@@ -72,7 +73,7 @@ const MEMORY_DESCRIBE_SCHEMA = {
   properties: {
     summaryId: {
       type: "string",
-      description: "A summary ID (sum_xxx format) returned by libravdb_memory_search. Inspect metadata without expanding.",
+      description: "A summary reference from libravdb_memory_search or memory_grep. Copy its path/recordId to preserve the source tenant and session; bare sum_xxx IDs use the current tenant and selected session.",
     },
     sessionId: {
       type: "string",
@@ -89,7 +90,7 @@ const MEMORY_EXPAND_SCHEMA = {
     summaryIds: {
       type: "array",
       items: { type: "string" },
-      description: "Summary IDs (sum_xxx format) to expand. Use results from libravdb_memory_search or memory_describe.",
+      description: "Summary references to expand. Copy paths/recordIds from libravdb_memory_search or summary IDs from memory_grep/memory_describe to preserve their source tenant and session. Bare sum_xxx IDs use the current tenant and selected session.",
     },
     record_id: {
       type: "string",
@@ -471,7 +472,9 @@ export function createMemoryGrepTool(
               } catch { /* best-effort */ }
             }
             const snippet = truncateSnippet(r.text);
-            summaries.push({ summaryId: r.id, snippet, score: r.score, evictionCue });
+            const tenant = (r as RoutedSearchResult).sourceTenant;
+            const summaryId = tenant === undefined ? r.id : encodeRecordReference(tenant, `session_summary:${sessionId}`, r.id);
+            summaries.push({ summaryId, snippet, score: r.score, evictionCue });
             totalChars += snippet.length;
           }
         }
@@ -496,7 +499,9 @@ export function createMemoryGrepTool(
                 role = typeof meta.role === "string" ? meta.role : "unknown";
               } catch { /* best-effort */ }
             }
-            turns.push({ turnId: r.id, snippet, role, score: r.score });
+            const tenant = (r as RoutedSearchResult).sourceTenant;
+            const turnId = tenant === undefined ? r.id : encodeRecordReference(tenant, `session_raw:${sessionId}`, r.id);
+            turns.push({ turnId, snippet, role, score: r.score });
             totalChars += snippet.length;
           }
         }

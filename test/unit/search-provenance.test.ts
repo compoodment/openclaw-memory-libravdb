@@ -4,11 +4,12 @@ import { createServer, type ServerHttp2Session } from "node:http2";
 import { SearchTextResponse, ExpandSummaryRequest, ExpandSummaryResponse } from "@xdarkicex/libravdb-contracts";
 import { LibravDBClient } from "../../src/libravdb-client.js";
 import { buildMemoryRuntimeBridge } from "../../src/memory-runtime.js";
-import { createMemoryExpandTool } from "../../src/tools/memory-recall.js";
+import { createMemoryDescribeTool, createMemoryExpandTool, createMemoryGrepTool } from "../../src/tools/memory-recall.js";
 import { encodeRecordReference } from "../../src/record-reference.js";
 
-async function fixture(t: TestContext, multipleCollections = false) {
+async function fixture(t: TestContext, multipleCollections = false, summaries = false) {
   const expansions: Array<{ tenant: string; recordId: string }> = [];
+  const summaryExpansions: Array<{ tenant: string; summaryId: string; sessionId: string }> = [];
   const sessions = new Set<ServerHttp2Session>();
   const server = createServer();
   server.on("session", session => { sessions.add(session); session.on("close", () => sessions.delete(session)); });
@@ -21,15 +22,22 @@ async function fixture(t: TestContext, multipleCollections = false) {
     stream.on("end", () => {
       let response: Uint8Array = new Uint8Array();
       if (method === "SearchTextCollections" || method === "SearchText") {
-        const collections = method === "SearchText" ? ["dream:u1"] : multipleCollections ? ["user:u1", "global", "user:u1"] : ["user:u1"];
+        const collections = summaries ? ["session_summary:archived/session"] : method === "SearchText" ? ["dream:u1"] : multipleCollections ? ["user:u1", "global", "user:u1"] : ["user:u1"];
         response = new SearchTextResponse({ results: collections.map(collection => ({
           id: "shared/id::%", text: `${tenant} ${collection} record`, score: tenant === "a" ? 0.9 : 0.8,
           metadataJson: new TextEncoder().encode(JSON.stringify({ collection, sourceTenant: "spoofed" })),
         })) }).toBinary();
       } else if (method === "ExpandSummary") {
         const req = ExpandSummaryRequest.fromBinary(Buffer.concat(chunks).subarray(5));
-        expansions.push({ tenant, recordId: req.recordId });
-        response = new ExpandSummaryResponse({ connected: [{ recordId: "child/id", text: `${tenant} child`, depth: 1 }] }).toBinary();
+        if (req.summaryId) {
+          summaryExpansions.push({ tenant, summaryId: req.summaryId, sessionId: req.sessionId });
+          response = new ExpandSummaryResponse({ summaryId: req.summaryId, text: `${tenant} summary`, metadataJson: new TextEncoder().encode(JSON.stringify({
+            continuity_lineage: { parent_summary_ids: ["sum_parent"], source_turn_ids: ["source-turn"] },
+          })) }).toBinary();
+        } else {
+          expansions.push({ tenant, recordId: req.recordId });
+          response = new ExpandSummaryResponse({ connected: [{ recordId: "child/id", text: `${tenant} child`, depth: 1 }] }).toBinary();
+        }
       }
       const frame = Buffer.alloc(5 + response.length);
       frame.writeUInt32BE(response.length, 1);
@@ -51,8 +59,46 @@ async function fixture(t: TestContext, multipleCollections = false) {
   });
   const { manager } = await buildMemoryRuntimeBridge(async () => client, { userId: "u1" }).getMemorySearchManager();
   const expand = createMemoryExpandTool(async () => client, () => undefined, { warn() {}, error() {} });
-  return { client, manager, expand, expansions };
+  return { client, manager, expand, expansions, summaryExpansions };
 }
+
+test("summary search references retain tenant and source session through describe and parent expansion", async t => {
+  const { client, manager, expand, summaryExpansions, expansions } = await fixture(t, false, true);
+  const hits = await manager.search({ query: "remember this" }) as Array<{ path: string; snippet: string }>;
+  const secondary = hits.find(hit => hit.snippet.startsWith("b "))!;
+  const describe = createMemoryDescribeTool(async () => client, () => "current-session", { warn() {}, error() {} });
+  const described = await describe.execute("describe", { summaryId: secondary.path });
+  assert.deepEqual(summaryExpansions, [{ tenant: "b", summaryId: "shared/id::%", sessionId: "archived/session" }]);
+  await expand.execute("parent", { summaryIds: described.details.parentSummaryIds, sessionId: "current-session" });
+  assert.deepEqual(summaryExpansions[1], { tenant: "b", summaryId: "sum_parent", sessionId: "archived/session" });
+  await expand.execute("source", { record_id: described.details.sourceTurnIds![0] });
+  assert.deepEqual(expansions[0], { tenant: "b", recordId: "source-turn" });
+  for (const reference of ["libravdb://record/b/session_summary%3As/%ZZ", encodeRecordReference("b", "user:u1", "summary"), encodeRecordReference("b", "session_summary:", "summary")]) {
+    const invalid = await describe.execute("invalid", { summaryId: reference });
+    assert.equal(invalid.details.found, false);
+  }
+  assert.equal(summaryExpansions.length, 2, "invalid summary references must never reach the daemon");
+  client.setReadTenants([]);
+  const denied = await describe.execute("denied", { summaryId: secondary.path });
+  assert.equal(denied.details.found, false);
+  assert.match(denied.details.error!, /outside configured read access/);
+  assert.equal(summaryExpansions.length, 2, "revoked references must not be sent to the daemon");
+});
+
+test("grep summary IDs preserve their source tenant for describe", async t => {
+  const { client, summaryExpansions } = await fixture(t, false, true);
+  const grep = createMemoryGrepTool(async () => client, () => "archived/session", { warn() {}, error() {} });
+  const describe = createMemoryDescribeTool(async () => client, () => "current-session", { warn() {}, error() {} });
+  client.setTenantKey("b");
+  const result = await grep.execute("grep", { pattern: "record", scope: "summaries" });
+  assert.equal(result.details.summaries.length, 1);
+  const ids = result.details.summaries.map(hit => hit.summaryId);
+  client.setTenantKey("a");
+  for (const id of ids) await describe.execute("describe", { summaryId: id });
+  assert.deepEqual(summaryExpansions, [
+    { tenant: "b", summaryId: "shared/id::%", sessionId: "archived/session" },
+  ]);
+});
 
 test("colliding tenant search hits retain exact reads and graph routing through follow-up edges", async t => {
   const { manager, expand, expansions } = await fixture(t);
