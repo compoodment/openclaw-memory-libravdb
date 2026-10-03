@@ -2,6 +2,14 @@
 
 All configuration keys are optional.
 
+`excludeAgents: ["voice"]` disables context-engine memory work for the named
+agents. It also skips their prompt routing, speaker-card and rule injection,
+reset/end lifecycle hints, and memory tool factories. The native memory runtime
+returns an unavailable manager before connecting for these agents. Hooks use the agent in
+`sessionKey` when available, otherwise `agentId`; recently observed excluded
+session IDs are retained for lifecycle events that omit both. Shared background
+Markdown ingestion and diary promotion are configured separately.
+
 If you do not have a GPU available, setting `onnxDevice` to `"cpu"` is
 recommended to avoid startup failures from missing GPU/NPU providers,
 but this is also optional — the service auto-detects and falls back to
