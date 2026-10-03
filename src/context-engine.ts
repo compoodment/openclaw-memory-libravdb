@@ -323,7 +323,7 @@ class SessionLifecycleChangedError extends Error {
 }
 
 interface PostToolContextCache {
-  lastUserIndex: number;
+  boundarySignature: string;
   systemPromptAddition: string;
 }
 const POST_TOOL_CACHE_MAX_SIZE = 100;
@@ -3078,6 +3078,7 @@ export function buildContextEngineFactory(
         ? normalizeKernelContent(args.prompt, { retainOpenClawContext: false })
         : "";
       const lastUserIndex = findLastUserMessageIndex(messages);
+      const turnBoundarySignature = buildBeforeTurnSignature(args.messages);
       const isPostToolContinuation = lastUserIndex >= 0 && lastUserIndex < messages.length - 1
         && hasLiveToolProtocolAfterLastUser(messages, lastUserIndex);
       const lastUserMessage = findLastReplaySafeUserMessage(messages);
@@ -3173,7 +3174,7 @@ export function buildContextEngineFactory(
         : (_msg: string) => {};
       let beforeTurnPredictions: BeforeTurnKernelResponse["predictions"] | null = null;
       let beforeTurnQueryHint: string | null = null;
-      let beforeTurnSignature: string | null = null;
+      const beforeTurnSignature = turnBoundarySignature;
       if (cfg.beforeTurnEnabled === false) {
         btLog(`BeforeTurnKernel disabled by config sessionId=${sessionId}`);
       } else if (!isInteractiveTrigger(sessionId)) {
@@ -3194,17 +3195,18 @@ export function buildContextEngineFactory(
         }
         if (beforeTurnQueryHint) {
           btLog(`BeforeTurnKernel calling sessionId=${sessionId} hint=${beforeTurnQueryHint.slice(0, 50)}`);
-          // Include message count in cache key so identical queries
-          // in different turns don't return stale predictions.
-          const turnScopedHint = `${messages.length}:${beforeTurnQueryHint}`;
-          const cached = turnCache.get(sessionId, turnScopedHint) as BeforeTurnKernelResponse | undefined;
+          // Transcript windows can have equal lengths across distinct turns.
+          // Use the full normalized user boundary, including message identity,
+          // rather than a message count and truncated query prefix.
+          const cached = beforeTurnSignature
+            ? turnCache.get(sessionId, beforeTurnSignature) as BeforeTurnKernelResponse | undefined
+            : undefined;
           if (cached?.predictions) {
             beforeTurnPredictions = cached.predictions;
             beforeTurnQueryHint = null;
           }
         }
         if (beforeTurnQueryHint) {
-          beforeTurnSignature = buildBeforeTurnSignature(args.messages);
           if (!beforeTurnSignature || hasAttemptedBeforeTurn(sessionId, beforeTurnSignature)) {
             beforeTurnQueryHint = null;
           }
@@ -3221,7 +3223,7 @@ export function buildContextEngineFactory(
 
         if (isPostToolContinuation) {
           const cached = postToolRecallCache.get(sessionId);
-          if (cached && cached.lastUserIndex === lastUserIndex) {
+          if (cached && turnBoundarySignature && cached.boundarySignature === turnBoundarySignature) {
             cachedSystemPrompt = cached.systemPromptAddition;
             logger.info?.(`LibraVDB skipping assemble context search for post-tool continuation sessionId=${sessionId}`);
 
@@ -3305,7 +3307,7 @@ export function buildContextEngineFactory(
               const clamped = btResult.predictions && btResult.predictions.length > maxMemories
                 ? selectTopByRelevance(btResult.predictions, retrievalQuery, maxMemories)
                 : btResult.predictions;
-              turnCache.set(sessionId, `${messages.length}:${beforeTurnQueryHint}`, { predictions: clamped });
+              if (beforeTurnSignature) turnCache.set(sessionId, beforeTurnSignature, { predictions: clamped });
               beforeTurnPredictions = clamped;
               clearBeforeTurnCircuit(sessionId);
             } catch (err) {
@@ -3563,14 +3565,16 @@ export function buildContextEngineFactory(
             args.tokenBudget,
           );
         }
-        if (postToolRecallCache.size >= POST_TOOL_CACHE_MAX_SIZE) {
-          const oldest = postToolRecallCache.keys().next().value;
-          if (oldest !== undefined) postToolRecallCache.delete(oldest);
+        if (turnBoundarySignature) {
+          if (postToolRecallCache.size >= POST_TOOL_CACHE_MAX_SIZE) {
+            const oldest = postToolRecallCache.keys().next().value;
+            if (oldest !== undefined) postToolRecallCache.delete(oldest);
+          }
+          postToolRecallCache.set(sessionId, {
+            boundarySignature: turnBoundarySignature,
+            systemPromptAddition: replaySafe.systemPromptAddition,
+          });
         }
-        postToolRecallCache.set(sessionId, {
-          lastUserIndex,
-          systemPromptAddition: replaySafe.systemPromptAddition,
-        });
         return replaySafe;
       } catch (error) {
         logger.warn?.(

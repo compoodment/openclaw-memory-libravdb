@@ -97,6 +97,10 @@ address, explicitly set `grpcEndpointTlsMode: "tls"` to match:
 
 ## Retrieval
 
+Recall cached for a turn is reused only while the normalized transcript through
+its latest user message is unchanged. A new message identity or changed query
+refreshes recall even when the transcript has the same length or query prefix.
+
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `topK` | number | — | Max results per search |
