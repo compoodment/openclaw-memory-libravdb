@@ -480,31 +480,38 @@ export function createMemoryGrepTool(
           }
         }
 
-        if (scope === "messages" || scope === "both") {
+        if ((scope === "messages" || scope === "both") && sessionId) {
           const searchK = Math.min(limit * 3, 200);
-          const turnResults = await client.searchText({
-            collection: `session_raw:${sessionId}`,
-            text: pattern,
-            k: searchK,
-          });
-          for (const r of (turnResults.results ?? [])) {
-            if (!safeMatch(r.text, pattern, mode)) continue;
+          const matchingTurns = new Map<string, MemoryGrepDetails["turns"][number]>();
+          // Normal session recall uses session:<id>; older raw turns may also
+          // exist in session_raw:<id>. Search independently to preserve both
+          // candidate pools, then budget unique exact matches.
+          for (const collection of [`session_raw:${sessionId}`, `session:${sessionId}`]) {
+            const turnResults = await client.searchText({ collection, text: pattern, k: searchK });
+            for (const r of (turnResults.results ?? [])) {
+              if (!safeMatch(r.text, pattern, mode)) continue;
+              const previous = matchingTurns.get(r.id);
+              if (previous && previous.score >= r.score) continue;
+              let role = "unknown";
+              if (r.metadataJson && r.metadataJson.length > 0) {
+                try {
+                  const meta: unknown = JSON.parse(new TextDecoder().decode(r.metadataJson));
+                  if (meta && typeof meta === "object" && !Array.isArray(meta) && "role" in meta && typeof meta.role === "string") {
+                    role = meta.role;
+                  }
+                } catch { /* best-effort */ }
+              }
+              matchingTurns.set(r.id, { turnId: r.id, snippet: truncateSnippet(r.text), role, score: r.score });
+            }
+          }
+          for (const turn of [...matchingTurns.values()].sort((a, b) => b.score - a.score)) {
             if (totalMatches >= limit || totalChars >= MAX_GREP_CHARS) {
               truncated = true;
               break;
             }
             totalMatches++;
-            const snippet = truncateSnippet(r.text);
-            let role = "unknown";
-            if (r.metadataJson && r.metadataJson.length > 0) {
-              try {
-                const decoder = new TextDecoder();
-                const meta = JSON.parse(decoder.decode(r.metadataJson)) as Record<string, unknown>;
-                role = typeof meta.role === "string" ? meta.role : "unknown";
-              } catch { /* best-effort */ }
-            }
-            turns.push({ turnId: r.id, snippet, role, score: r.score });
-            totalChars += snippet.length;
+            turns.push(turn);
+            totalChars += turn.snippet.length;
           }
         }
 
