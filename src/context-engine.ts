@@ -3672,9 +3672,9 @@ export function buildContextEngineFactory(
      * named a commit.
      *
      * Known limitations, inherited from afterTurn and not introduced here:
-     * - Overlap detection compares message id hashes where it has them, but a
-     *   multi-message overlap still matches on role and content alone, so two distinct
-     *   turns whose messages are byte-identical dedupe against each other and the
+     * - Without known host-supplied message identities on both sides, legacy
+     *   multi-message overlap still matches on role and content alone, so distinct
+     *   turns whose messages are byte-identical can dedupe against each other and the
      *   second is not ingested. It is reported as committed anyway, since replaying it
      *   would dedupe identically. The stored content is the same either way; what is
      *   lost is the repeat occurrence.
@@ -3818,11 +3818,14 @@ export function buildContextEngineFactory(
 
       const afterTurnMessages = selectAfterTurnMessages(args.messages, args.prePromptMessageCount, logger);
       const messages = normalizeKernelMessages(afterTurnMessages, { retainOpenClawContext: true });
+      const hostMessageIds = new Set(args.messages
+        .map(message => message.id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0));
 
       // Sync preflight: return skipped immediately when no new messages exist,
       // preserving the original afterTurn completion contract for idempotency.
       const preflightManifest = manifestStore.load(sessionId, logger);
-      const preflightOverlap = manifestStore.findOverlapIndex(preflightManifest, messages);
+      const preflightOverlap = manifestStore.findOverlapIndex(preflightManifest, messages, hostMessageIds);
       const preflightNewCount = messages.slice(preflightOverlap).length;
 
       logger.info?.(
@@ -3847,7 +3850,7 @@ export function buildContextEngineFactory(
           // Reload manifest inside the serialized queue so state is fresh
           // after any preceding queued tasks have completed.
           const manifest = manifestStore.load(sessionId, logger);
-          const overlapIndex = manifestStore.findOverlapIndex(manifest, messages);
+          const overlapIndex = manifestStore.findOverlapIndex(manifest, messages, hostMessageIds);
           const newMessages = messages.slice(overlapIndex);
 
           if (newMessages.length === 0) {
@@ -3931,7 +3934,7 @@ export function buildContextEngineFactory(
                 } as unknown as Parameters<typeof client.afterTurnKernel>[0]);
                 if (!lifecycleIsCurrent()) throw new SessionLifecycleChangedError();
                 manifestStore.save(
-                  manifestStore.appendACKedMessages(emptyManifest, seedMessages, 0),
+                  manifestStore.appendACKedMessages(emptyManifest, seedMessages, 0, hostMessageIds),
                 );
                 repairedCursorGap = true;
                 daemonCursor = extractCursorFromResult(result);
@@ -3964,6 +3967,7 @@ export function buildContextEngineFactory(
                 manifest,
                 ackedMessages,
                 startIndex,
+                hostMessageIds,
               );
               manifestStore.save(updatedManifest);
             }
@@ -3973,6 +3977,7 @@ export function buildContextEngineFactory(
               manifest,
               ingestMessages,
               startIndex,
+              hostMessageIds,
             );
             manifestStore.save(updatedManifest);
           }
