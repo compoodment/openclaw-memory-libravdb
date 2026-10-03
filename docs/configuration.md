@@ -165,6 +165,12 @@ The plugin exposes `ingestionGateThreshold` for host-side gating decisions:
 | `markdownIngestionSnapshotPath` | string | — | Path to snapshot file for generic markdown ingestion state |
 | `markdownIngestionObsidianSnapshotPath` | string | — | Path to snapshot file for Obsidian ingestion state |
 
+Snapshots keep separate file checkpoints for each resolved daemon endpoint and write tenant.
+Changing either destination uploads unchanged files to the new destination; returning to a
+previous destination restores its cleanup history. Older snapshots are revalidated by
+re-uploading present files once. This does not detect a database erased behind an unchanged
+endpoint and tenant; remove the corresponding snapshot to force a full rescan in that case.
+
 Configured markdown roots are ignored unless the matching enable flag is set to
 `true`. Set `markdownIngestionEnabled: true` for generic roots and
 `markdownIngestionObsidianEnabled: true` for Obsidian vault roots.
