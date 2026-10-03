@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
+import { AfterTurnKernelResponse } from "@xdarkicex/libravdb-contracts";
 
 import { buildContextEngineFactory, clearCompactedProjectionState, createCompactedProjectionState, FLUSH_ASYNC_INGESTION } from "../../src/context-engine.js";
 import fs from "node:fs";
@@ -4437,6 +4438,17 @@ test("afterTurn fails loudly when the daemon confirms none of the batch", async 
   );
 });
 
+function decodedTurnResponse(cursor: { lastProcessedIndex: number; sessionVersion: number; manifestTailHash: string }): Record<string, unknown> {
+  return AfterTurnKernelResponse.fromBinary(new AfterTurnKernelResponse({
+    ok: true,
+    cursor: {
+      ...cursor,
+      lastProcessedIndex: BigInt(cursor.lastProcessedIndex),
+      sessionVersion: BigInt(cursor.sessionVersion),
+    },
+  }).toBinary()) as unknown as Record<string, unknown>;
+}
+
 test("commitTurn retries the unconfirmed suffix after a partial daemon acknowledgment", async () => {
   for (const identity of ["ids", "idless"] as const) {
     const client = new FakeClient();
@@ -4444,8 +4456,8 @@ test("commitTurn retries the unconfirmed suffix after a partial daemon acknowled
     const messagesWithIds = [makeMessage("user", "question", "partial-u"), makeMessage("assistant", "reply", "partial-a")];
     const messages = identity === "ids" ? messagesWithIds : messagesWithIds.map(({ role, content }) => ({ role, content }));
     client.afterTurnResponses = [
-      { cursor: { lastProcessedIndex: 0, sessionVersion: 1, manifestTailHash: "partial" } },
-      { cursor: { lastProcessedIndex: 1, sessionVersion: 2, manifestTailHash: "complete" } },
+      decodedTurnResponse({ lastProcessedIndex: 0, sessionVersion: 1, manifestTailHash: "partial" }),
+      decodedTurnResponse({ lastProcessedIndex: 1, sessionVersion: 2, manifestTailHash: "complete" }),
     ];
     const engine = buildContextEngineFactory(fakeRuntime(client), { userId: "fixed-user" });
     const args = { advancementKey: `adv-partial-ack-${identity}`, sessionId, messages };
@@ -4475,17 +4487,17 @@ test("cursor-gap repair persists only confirmed seed messages and leaves failed 
         makeMessage("assistant", "new reply", `${confirmation}-a2`),
       ];
       const messages = identity === "ids" ? messagesWithIds : messagesWithIds.map(({ role, content }) => ({ role, content }));
-      client.afterTurnResponses = [{ cursor: { lastProcessedIndex: 1, sessionVersion: 1, manifestTailHash: "old" } }];
+      client.afterTurnResponses = [decodedTurnResponse({ lastProcessedIndex: 1, sessionVersion: 1, manifestTailHash: "old" })];
       await engine.afterTurn({ sessionId, messages: messages.slice(0, 2) });
       await flushIngestion(engine);
 
       client.afterTurnResponses = [
-        { cursor: { lastProcessedIndex: 0, sessionVersion: 1, manifestTailHash: "" } },
-        { cursor: {
+        decodedTurnResponse({ lastProcessedIndex: 0, sessionVersion: 1, manifestTailHash: "" }),
+        decodedTurnResponse({
           lastProcessedIndex: confirmation === "partial" ? 1 : confirmation === "partial-before-prompt" ? 0 : -1,
           sessionVersion: 1,
           manifestTailHash: confirmation === "another-gap" ? "" : "confirmed-tail",
-        } },
+        }),
       ];
       if (confirmation === "rpc-error") {
         const original = client.afterTurnKernel.bind(client);
@@ -4508,7 +4520,7 @@ test("cursor-gap repair persists only confirmed seed messages and leaves failed 
       // A replacement engine must recover the unconfirmed historical suffix
       // from persisted state, including messages before prePromptMessageCount.
       const replacement = buildContextEngineFactory(fakeRuntime(client), { userId: "fixed-user" });
-      client.afterTurnResponse = { cursor: { lastProcessedIndex: 3, sessionVersion: 2, manifestTailHash: "recovered" } };
+      client.afterTurnResponse = decodedTurnResponse({ lastProcessedIndex: 3, sessionVersion: 2, manifestTailHash: "recovered" });
       assert.equal((await replacement.commitTurn(args)).status, "committed");
       const retried = client.calls.filter((call) => call.method === "afterTurnKernel").at(-1)!;
       const outgoing = retried.params.messages as Array<{ role: string; content: string; id?: string }>;

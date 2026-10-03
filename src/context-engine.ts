@@ -1992,14 +1992,23 @@ type CursorFromDaemon = {
 function extractCursorFromResult(result: unknown): CursorFromDaemon | undefined {
   if (result && typeof result === "object" && "cursor" in result) {
     const cursor = (result as Record<string, unknown>).cursor;
+    if (cursor == null) return undefined;
     if (cursor && typeof cursor === "object") {
       const c = cursor as Record<string, unknown>;
-      if (typeof c.lastProcessedIndex === "number" &&
-          typeof c.sessionVersion === "number" &&
+      // Connect decodes int64 fields as bigint. Manifests use numeric indices;
+      // convert only exact, valid values rather than silently treating an
+      // unrecognized cursor as a legacy cursorless acknowledgement.
+      const lastProcessedIndex = typeof c.lastProcessedIndex === "bigint"
+        ? Number(c.lastProcessedIndex) : c.lastProcessedIndex;
+      const sessionVersion = typeof c.sessionVersion === "bigint"
+        ? Number(c.sessionVersion) : c.sessionVersion;
+      if (typeof lastProcessedIndex === "number" && Number.isSafeInteger(lastProcessedIndex) && lastProcessedIndex >= -1 &&
+          typeof sessionVersion === "number" && Number.isSafeInteger(sessionVersion) && sessionVersion >= 0 &&
           typeof c.manifestTailHash === "string") {
-        return c as CursorFromDaemon;
+        return { lastProcessedIndex, sessionVersion, manifestTailHash: c.manifestTailHash };
       }
     }
+    throw new Error("[LibraVDB] Daemon returned an invalid session cursor; ingestion must be retried.");
   }
   return undefined;
 }
@@ -2011,6 +2020,9 @@ function persistAcknowledgedBatch(
   startIndex: number,
   result: unknown,
 ): void {
+  if (result && typeof result === "object" && "ok" in result && result.ok === false) {
+    throw new Error(`[LibraVDB] afterTurnKernel returned ok=false for session ${manifest.sessionId}; ingestion must be retried.`);
+  }
   const cursor = extractCursorFromResult(result);
   // Legacy daemons without cursors retain their optimistic ACK behavior.
   // An empty tail hash is the daemon's explicit rejection of the batch.

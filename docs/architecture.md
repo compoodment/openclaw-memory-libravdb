@@ -50,6 +50,14 @@ main retrieval path.
 Session messages are written into the vector service-backed store. User turns may also
 be promoted into durable user memory after gating.
 
+Durable turn commits checkpoint only the message prefix acknowledged by the
+daemon. Partial acknowledgements and explicit rejections leave the turn
+retryable, including after engine replacement. Cursor-gap recovery keeps its
+pending state until the full recovery batch is confirmed. Protobuf cursor
+integers are checked before conversion to local indices; an invalid cursor
+cannot fall back to optimistic success. Successful responses from older
+daemons without cursors retain their compatibility behavior.
+
 ### `assemble`
 
 The context engine queries the relevant memory scopes, ranks the results, fits
