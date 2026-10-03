@@ -227,14 +227,21 @@ export function register(api: OpenClawPluginApi) {
   // compaction backend. When agents.defaults.compaction.provider is
   // set to "libravdb-memory", the framework's compaction safeguard
   // delegates summarization here instead of burning LLM tokens.
-  type CompactionProviderApi = { registerCompactionProvider?: (p: { id: string; label: string; summarize(params: { messages: unknown[] }): Promise<string> }) => void };
+  type CompactionProviderApi = { registerCompactionProvider?: (p: { id: string; label: string; summarize(params: { messages: unknown[]; previousSummary?: string }): Promise<string> }) => void };
   (api as unknown as CompactionProviderApi).registerCompactionProvider?.({
     id: MEMORY_ID,
     label: "LibraVDB Extractive Summarization",
-    async summarize({ messages }) {
+    async summarize({ messages, previousSummary }) {
       const client = await runtime.getClient();
+      const summary = previousSummary?.trim();
+      // OpenClaw keeps earlier compacted history outside the current messages.
+      // Feed it back into summarization so subsequent compactions can retain
+      // those facts while dropping details superseded by the newer messages.
+      const sourceMessages = summary
+        ? [{ role: "user", content: `<previous-compaction-summary>\nHistorical context from the previous compaction:\n${summary}\n</previous-compaction-summary>` }, ...messages]
+        : messages;
       const result = await client.summarizeMessages({
-        messages: messages.map((m) => normalizeKernelMessage(m as { role: string; content: unknown; id?: string })) as any,
+        messages: sourceMessages.map((m) => normalizeKernelMessage(m as { role: string; content: unknown; id?: string })) as any,
         maxOutputTokens: 64,
       } as any);
       return result.summaryText;
