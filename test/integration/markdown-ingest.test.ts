@@ -1595,3 +1595,60 @@ test("an obsidian note that stops qualifying is retired without being re-tracked
 
   await handle.stop();
 });
+
+for (const replacedRoot of [true, false]) {
+  test(`watchers resume after replacing a ${replacedRoot ? "root" : "nested directory"}`, async () => {
+    class InodeFs extends FakeFsApi {
+      generations = new Map<string, number>();
+      override watch(dir: string, callback: (event: string, filename: string | Buffer | null) => void) {
+        if (!this.dirs.has(dir)) throw Object.assign(new Error("missing directory"), { code: "ENOENT" });
+        const generation = this.generations.get(dir) ?? 0;
+        return super.watch(dir, (event, filename) => {
+          if ((this.generations.get(dir) ?? 0) === generation) callback(event, filename);
+        });
+      }
+      emit(dir: string, event: string, filename: string) {
+        for (const callback of [...(this.callbacks.get(dir) ?? [])]) callback(event, filename);
+      }
+      replace(dir: string) {
+        this.generations.set(dir, (this.generations.get(dir) ?? 0) + 1);
+      }
+    }
+    const temp = await fsp.mkdtemp(path.join(os.tmpdir(), "libravdb-watch-replace-"));
+    const root = path.join(temp, "notes");
+    const target = replacedRoot ? root : path.join(root, "nested");
+    const note = path.join(target, "note.md");
+    const fsApi = new InodeFs();
+    const rpc = new FakeRpcClient();
+    await fsApi.writeFile(note, "original", 1000);
+    const handle = createMarkdownIngestionHandle({
+      markdownIngestionEnabled: true, markdownIngestionRoots: [root],
+      markdownIngestionSnapshotPath: snapshotPath(temp), markdownIngestionDebounceMs: 0,
+    }, async () => rpc as never, { info() {}, warn() {}, error() {} }, fsApi as never);
+    async function until(predicate: () => boolean) {
+      for (let i = 0; i < 100 && !predicate(); i++) await delay(5);
+      assert.ok(predicate(), "watcher failed to observe the current directory");
+    }
+    try {
+      await handle.start();
+      assert.equal(rpc.documents.get(note)?.text, "original");
+      // An old inode can deliver its final rename event, but never changes in
+      // a new directory subsequently created at the same path.
+      fsApi.emit(target, "rename", path.basename(target));
+      await fsApi.rmdir(target);
+      fsApi.replace(target);
+      fsApi.emit(path.dirname(target), "rename", path.basename(target));
+      await until(() => !rpc.documents.has(note));
+      await fsApi.writeFile(note, "replacement", 2000);
+      fsApi.emit(path.dirname(target), "rename", path.basename(target));
+      await until(() => rpc.documents.get(note)?.text === "replacement");
+      await fsApi.writeFile(note, "later edit", 3000);
+      fsApi.emit(target, "change", "note.md");
+      await until(() => rpc.documents.get(note)?.text === "later edit");
+    } finally {
+      await handle.stop();
+      assert.equal(fsApi.callbacks.size, 0, "stop must close parent and directory watchers");
+      await fsp.rm(temp, { recursive: true, force: true });
+    }
+  });
+}

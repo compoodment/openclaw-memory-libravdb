@@ -150,6 +150,10 @@ The plugin exposes `ingestionGateThreshold` for host-side gating decisions:
 
 ## Markdown ingestion
 
+Directory watches are renewed after a root or nested directory is replaced.
+A watch on each root's parent also detects recreation after the root is removed.
+That parent must remain present and watchable.
+
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `markdownIngestionEnabled` | boolean | `false` | Watch markdown roots for changes |
