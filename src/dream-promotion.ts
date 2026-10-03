@@ -82,6 +82,7 @@ interface DreamPromotionState {
   scanning: boolean;
   timer: ReturnType<typeof setTimeout> | null;
   watcher: FsWatcherLike | null;
+  parentWatcher: FsWatcherLike | null;
 }
 
 export function createDreamPromotionHandle(
@@ -114,6 +115,7 @@ export function createDreamPromotionHandle(
     scanning: false,
     timer: null,
     watcher: null,
+    parentWatcher: null,
   };
   let lastFileState: DreamFileState | null = null;
   const debounceMs = cfg.dreamPromotionDebounceMs ?? DEFAULT_DEBOUNCE_MS;
@@ -137,10 +139,9 @@ export function createDreamPromotionHandle(
         clearTimeout(state.timer);
         state.timer = null;
       }
-      if (state.watcher) {
-        state.watcher.close();
-        state.watcher = null;
-      }
+      closeDiaryWatcher();
+      state.parentWatcher?.close();
+      state.parentWatcher = null;
     },
   };
 
@@ -259,27 +260,66 @@ export function createDreamPromotionHandle(
     }
   }
 
-  async function ensureWatcher(): Promise<void> {
-    if (state.watcher) {
-      return;
-    }
-    const parentDir = path.dirname(diaryPath);
+  function closeDiaryWatcher(): void {
+    state.watcher?.close();
+    state.watcher = null;
+  }
+
+  function ensureParentWatcher(parentDir: string): void {
+    const grandparent = path.dirname(parentDir);
+    if (state.parentWatcher || grandparent === parentDir) return;
     try {
-      const watcher = fsApi.watch(parentDir, (_event, filename) => {
-        if (filename && path.basename(String(filename)) !== path.basename(diaryPath)) {
+      const watcher = fsApi.watch(grandparent, (event, filename) => {
+        if (!state.watching || state.parentWatcher !== watcher) return;
+        if (filename !== null && filename.toString() !== path.basename(parentDir)) return;
+        if (event === "rename") closeDiaryWatcher();
+        state.dirty = true;
+        void refreshDiary();
+      });
+      state.parentWatcher = watcher;
+      watcher.on("error", (error) => {
+        if (state.parentWatcher !== watcher) return;
+        state.parentWatcher = null;
+        watcher.close();
+        logger.warn?.(`[dream-promotion] parent watch error for ${grandparent}: ${formatError(error)}`);
+        void refreshDiary();
+      });
+    } catch (error) {
+      logger.warn?.(`[dream-promotion] parent watch unavailable for ${grandparent}: ${formatError(error)}`);
+    }
+  }
+
+  async function ensureWatcher(): Promise<void> {
+    if (!state.watching) return;
+    const parentDir = path.dirname(diaryPath);
+    // Keep observing the containing directory while the diary directory is
+    // missing. A watch on the old inode cannot see its later replacement.
+    ensureParentWatcher(parentDir);
+    if (state.watcher) return;
+    try {
+      const watcher = fsApi.watch(parentDir, (event, filename) => {
+        if (!state.watching || state.watcher !== watcher) return;
+        const name = filename?.toString();
+        if (event === "rename" && (!name || name === path.basename(parentDir))) {
+          closeDiaryWatcher();
+        } else if (name && path.basename(name) !== path.basename(diaryPath)) {
           return;
         }
         state.dirty = true;
         void refreshDiary();
       });
-      watcher.on("error", (error) => {
-        logger.warn?.(`[dream-promotion] watch error for ${parentDir}: ${formatError(error)}`);
-      });
       state.watcher = watcher;
+      watcher.on("error", (error) => {
+        if (state.watcher !== watcher) return;
+        closeDiaryWatcher();
+        logger.warn?.(`[dream-promotion] watch error for ${parentDir}: ${formatError(error)}`);
+        void refreshDiary();
+      });
     } catch (error) {
       logger.warn?.(`[dream-promotion] watch unavailable for ${parentDir}: ${formatError(error)}`);
     }
   }
+
 }
 
 export async function promoteDreamDiaryFile(

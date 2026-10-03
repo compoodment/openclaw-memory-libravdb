@@ -211,6 +211,9 @@ and recency-adjusted scoring pass that runs after the initial vector search.
 
 ## Dream promotion
 
+The diary watcher also detects creation or replacement of its containing directory,
+provided that directory's parent remains present and watchable.
+
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `dreamPromotionEnabled` | boolean | `false` | Enable dream diary promotion |
