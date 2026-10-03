@@ -56,6 +56,10 @@ The context engine queries the relevant memory scopes, ranks the results, fits
 them to the current token budget, and injects the selected items as synthetic
 system messages.
 
+Continuity, the user card, and the bot persona are fetched for the bootstrap
+turn where they are injected. Established conversations do not wait for these
+bootstrap-only reads when assembling later turns.
+
 ### `compact`
 
 Compaction is explicit rather than background-only. The host can request a
