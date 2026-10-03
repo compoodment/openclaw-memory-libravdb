@@ -62,6 +62,7 @@ for (const cleanup of ["gateway_stop", "delete"] as const) {
     const reading = deferred();
     const releaseRead = deferred();
     const events: string[] = [];
+    let openedWatchers = 0;
     const readFile = fsp.readFile.bind(fsp);
     const stat = fsp.stat.bind(fsp);
     t.mock.method(fsp, "readFile", async (...args: Parameters<typeof fsp.readFile>) => {
@@ -74,7 +75,10 @@ for (const cleanup of ["gateway_stop", "delete"] as const) {
       if (String(args[0]) !== diaryPath) return stat(...args);
       return { size: diaryText.length, mtimeMs: 1 };
     });
-    t.mock.method(fs, "watch", () => ({ close() { events.push("unwatch"); }, on() {} }));
+    t.mock.method(fs, "watch", () => {
+      openedWatchers++;
+      return { close() { events.push("unwatch"); }, on() {} };
+    });
     t.mock.method(LibravDBClient.prototype, "bootstrapHandshake", async () => {});
     t.mock.method(LibravDBClient.prototype, "promoteDreamEntries", async () => {
       events.push("promote");
@@ -109,11 +113,12 @@ for (const cleanup of ["gateway_stop", "delete"] as const) {
       await yieldImmediate();
       assert.equal(concurrentStopped, false, "concurrent shutdown must join the same drain");
       assert.equal(stopped, false, "runtime shutdown must join background work even before host service.stop");
-      assert.deepEqual(events, ["unwatch"]);
+      assert.ok(openedWatchers > 0);
+      assert.deepEqual(events, Array(openedWatchers).fill("unwatch"));
       releaseRead.resolve();
       await stopping;
       await concurrentStop;
-      assert.deepEqual(events, ["unwatch", "promote", "flush", "close"]);
+      assert.deepEqual(events, [...Array(openedWatchers).fill("unwatch"), "promote", "flush", "close"]);
       t.mock.timers.tick(100);
       await yieldImmediate();
       assert.equal(events.filter(event => event === "promote").length, 1);
