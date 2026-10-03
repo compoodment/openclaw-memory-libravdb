@@ -162,7 +162,7 @@ The plugin exposes `ingestionGateThreshold` for host-side gating decisions:
 | `markdownIngestionObsidianInclude` | string[] | — | Obsidian glob include patterns |
 | `markdownIngestionObsidianExclude` | string[] | same defaults as above | Obsidian glob exclude patterns; defaults to the same set as generic markdown ingestion |
 | `markdownIngestionObsidianDebounceMs` | number | `150` | Obsidian debounce window |
-| `markdownIngestionSnapshotPath` | string | — | Path to snapshot file for generic markdown ingestion state |
+| `markdownIngestionSnapshotPath` | string | — | Path to snapshot file for generic markdown ingestion state; updates from concurrent root scans are serialized so restart cleanup retains every tracked document |
 | `markdownIngestionObsidianSnapshotPath` | string | — | Path to snapshot file for Obsidian ingestion state |
 
 Configured markdown roots are ignored unless the matching enable flag is set to
