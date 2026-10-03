@@ -319,6 +319,10 @@ const asyncIngestionQueues = new Map<string, Promise<void>>();
 // belongs to their shared plugin runtime, not the engine that prepared a spawn.
 const excludedSubagentsByRuntime = new WeakMap<PluginRuntime, Set<string>>();
 
+export function isRuntimeSubagentExcluded(runtime: PluginRuntime, sessionKey: string): boolean {
+  return excludedSubagentsByRuntime.get(runtime)?.has(sessionKey.trim()) ?? false;
+}
+
 function runtimeSubagentExclusions(runtime: PluginRuntime): Set<string> {
   let keys = excludedSubagentsByRuntime.get(runtime);
   if (!keys) {
