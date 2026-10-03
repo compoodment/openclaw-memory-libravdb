@@ -50,6 +50,13 @@ main retrieval path.
 Session messages are written into the vector service-backed store. User turns may also
 be promoted into durable user memory after gating.
 
+After-turn ingestion caps large payloads to protect the embedding service. When
+it truncates a single message, the local checkpoint also retains a hash of the
+original normalized content so an exact replay with the same message identity
+is recognized after restart. The daemon's hash chain still describes only the
+bounded content actually sent. This does not restore content omitted by the cap
+or change how whole messages are selected from an oversized batch.
+
 ### `assemble`
 
 The context engine queries the relevant memory scopes, ranks the results, fits

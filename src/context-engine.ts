@@ -968,6 +968,7 @@ function truncateContentToTokenBudget(content: unknown, tokenBudget: number): st
 function trimMessagesToBudget(
   messages: OpenClawCompatibleMessage[],
   tokenBudget: number,
+  onTruncate?: (bounded: OpenClawCompatibleMessage, original: OpenClawCompatibleMessage) => void,
 ): OpenClawCompatibleMessage[] {
   if (tokenBudget <= 0 || messages.length === 0) {
     return [];
@@ -998,7 +999,9 @@ function trimMessagesToBudget(
   if (!truncated) {
     return [];
   }
-  return [{ ...last, content: truncated }];
+  const bounded = { ...last, content: truncated };
+  onTruncate?.(bounded, last);
+  return [bounded];
 }
 
 /**
@@ -1049,14 +1052,22 @@ function boundAfterTurnMessagesForIngest(
   messages: KernelCompatibleMessage[],
   logger: LoggerLike,
   sessionId: string,
+  sourceContentHashes: Map<KernelCompatibleMessage, string>,
 ): KernelCompatibleMessage[] {
   const estimatedTokens = approximateMessagesTokens(messages);
   if (estimatedTokens <= AFTER_TURN_INGEST_MAX_TOKENS) {
     return messages;
   }
 
-  const bounded = trimMessagesToBudget(messages, AFTER_TURN_INGEST_MAX_TOKENS)
-    .map((message) => normalizeKernelMessage(message));
+  const truncatedSources = new Map<OpenClawCompatibleMessage, string>();
+  const bounded = trimMessagesToBudget(messages, AFTER_TURN_INGEST_MAX_TOKENS, (message, original) => {
+    truncatedSources.set(message, manifestStore.hashString(original.content as string));
+  }).map((message) => {
+    const normalized = normalizeKernelMessage(message);
+    const sourceHash = truncatedSources.get(message);
+    if (sourceHash) sourceContentHashes.set(normalized, sourceHash);
+    return normalized;
+  });
   logger.info?.(
     `LibraVDB afterTurn trimmed oversized ingest payload sessionId=${sessionId} ` +
     `estimatedTokens=${estimatedTokens} maxTokens=${AFTER_TURN_INGEST_MAX_TOKENS} ` +
@@ -3855,7 +3866,10 @@ export function buildContextEngineFactory(
           }
 
           // Apply token budget cap only to new messages
-          const ingestMessages = boundAfterTurnMessagesForIngest(newMessages, logger, sessionId);
+          // Preserve original-content identity locally while the daemon chain
+          // continues hashing only the bounded payload it actually receives.
+          const sourceContentHashes = new Map<KernelCompatibleMessage, string>();
+          const ingestMessages = boundAfterTurnMessagesForIngest(newMessages, logger, sessionId, sourceContentHashes);
           // A manifest with no acknowledged turns is an initial/recovery
           // ingest, not an OpenClaw transcript offset. Sending the host's
           // pre-prompt count here makes the daemon reject the batch as a gap
@@ -3915,6 +3929,7 @@ export function buildContextEngineFactory(
                 normalizeKernelMessages(args.messages, { retainOpenClawContext: true }),
                 logger,
                 sessionId,
+                sourceContentHashes,
               );
               const emptyManifest = manifestStore.createEmpty(sessionId);
               if (seedMessages.length > 0) {
@@ -3931,7 +3946,7 @@ export function buildContextEngineFactory(
                 } as unknown as Parameters<typeof client.afterTurnKernel>[0]);
                 if (!lifecycleIsCurrent()) throw new SessionLifecycleChangedError();
                 manifestStore.save(
-                  manifestStore.appendACKedMessages(emptyManifest, seedMessages, 0),
+                  manifestStore.appendACKedMessages(emptyManifest, seedMessages, 0, sourceContentHashes),
                 );
                 repairedCursorGap = true;
                 daemonCursor = extractCursorFromResult(result);
@@ -3964,6 +3979,7 @@ export function buildContextEngineFactory(
                 manifest,
                 ackedMessages,
                 startIndex,
+                sourceContentHashes,
               );
               manifestStore.save(updatedManifest);
             }
@@ -3973,6 +3989,7 @@ export function buildContextEngineFactory(
               manifest,
               ingestMessages,
               startIndex,
+              sourceContentHashes,
             );
             manifestStore.save(updatedManifest);
           }

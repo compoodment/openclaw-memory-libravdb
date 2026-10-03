@@ -7,6 +7,8 @@ export interface TurnEntry {
   index: number;
   role: string;
   contentHash: string;
+  /** Original normalized content when the ingest cap truncated this message. */
+  sourceContentHash?: string;
   idHash?: string;
   turnHash: string;
   ingestedAt: number;
@@ -148,7 +150,7 @@ export class TurnManifestStore {
     for (let i = 0; i < overlapLength; i++) {
       const turn = turns[manifestStart + i];
       const msg = incomingMessages[i];
-      if (!turn || !msg || turn.role !== msg.role || turn.contentHash !== this.hashString(msg.content)) {
+      if (!turn || !msg || turn.role !== msg.role || (turn.sourceContentHash ?? turn.contentHash) !== this.hashString(msg.content)) {
         return false;
       }
       const incomingIdHash = msg.id ? this.hashString(msg.id) : undefined;
@@ -168,6 +170,7 @@ export class TurnManifestStore {
     manifest: TurnManifest,
     newMessages: KernelCompatibleMessage[],
     startingIndex: number,
+    sourceContentHashes?: ReadonlyMap<KernelCompatibleMessage, string>,
   ): TurnManifest {
     let currentHash = manifest.tailHash;
     const newTurns: TurnEntry[] = [];
@@ -176,6 +179,7 @@ export class TurnManifestStore {
       const msg = newMessages[i];
       const absoluteIndex = startingIndex + i;
       const contentHash = this.hashString(msg.content);
+      const sourceContentHash = sourceContentHashes?.get(msg);
       const idHash = msg.id ? this.hashString(msg.id) : undefined;
 
       currentHash = this.hashString(`${absoluteIndex}${msg.role}${contentHash}${currentHash}`);
@@ -184,6 +188,7 @@ export class TurnManifestStore {
         index: absoluteIndex,
         role: msg.role,
         contentHash,
+        ...(sourceContentHash && sourceContentHash !== contentHash ? { sourceContentHash } : {}),
         ...(idHash ? { idHash } : {}),
         turnHash: currentHash,
         ingestedAt: Date.now(),
