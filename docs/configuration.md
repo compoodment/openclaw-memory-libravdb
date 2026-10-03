@@ -207,6 +207,10 @@ and recency-adjusted scoring pass that runs after the initial vector search.
 
 ## Dream promotion
 
+Diary entries with malformed numeric metadata are skipped. The `recall` and
+`unique` counts must fit the RPC's signed 32-bit integer fields; an out-of-range
+entry is skipped so it cannot prevent valid entries in the diary from syncing.
+
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `dreamPromotionEnabled` | boolean | `false` | Enable dream diary promotion |
