@@ -151,8 +151,9 @@ The plugin exposes `ingestionGateThreshold` for host-side gating decisions:
 ## Markdown ingestion
 
 Directory watches are renewed after a root or nested directory is replaced.
-A watch on each root's parent also detects recreation after the root is removed.
-That parent must remain present and watchable.
+A watch on the nearest existing ancestor also detects creation when a root or
+its parents are initially missing, and moves closer as directories appear.
+At least one ancestor must be present and watchable.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
@@ -212,7 +213,8 @@ and recency-adjusted scoring pass that runs after the initial vector search.
 ## Dream promotion
 
 The diary watcher also detects creation or replacement of its containing directory,
-provided that directory's parent remains present and watchable.
+including initially missing parent directories, provided an existing ancestor
+remains watchable.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|

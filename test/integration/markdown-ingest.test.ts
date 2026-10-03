@@ -1596,6 +1596,54 @@ test("an obsidian note that stops qualifying is retired without being re-tracked
   await handle.stop();
 });
 
+test("watchers discover a Markdown root through multiple initially missing ancestors", async t => {
+  class ExistingDirectoryFs extends FakeFsApi {
+    override watch(dir: string, callback: (event: string, filename: string | Buffer | null) => void) {
+      if (!this.dirs.has(dir)) throw Object.assign(new Error("missing directory"), { code: "ENOENT" });
+      return super.watch(dir, callback);
+    }
+    emit(dir: string, filename: string) {
+      for (const callback of [...(this.callbacks.get(dir) ?? [])]) callback("rename", filename);
+    }
+  }
+  const temp = await fsp.mkdtemp(path.join(os.tmpdir(), "libravdb-missing-ancestors-"));
+  const first = path.join(temp, "new-workspace");
+  const second = path.join(first, "notes");
+  const root = path.join(second, "vault");
+  const note = path.join(root, "note.md");
+  const fsApi = new ExistingDirectoryFs();
+  await fsApi.mkdir(temp);
+  const rpc = new FakeRpcClient();
+  const handle = createMarkdownIngestionHandle({
+    markdownIngestionEnabled: true, markdownIngestionRoots: [root],
+    markdownIngestionSnapshotPath: snapshotPath(temp), markdownIngestionDebounceMs: 0,
+  }, async () => rpc as never, { info() {}, warn() {}, error() {} }, fsApi as never);
+  t.after(async () => { await handle.stop(); await fsp.rm(temp, { recursive: true, force: true }); });
+  async function until(predicate: () => boolean) {
+    for (let i = 0; i < 100 && !predicate(); i++) await delay(5);
+    assert.ok(predicate(), "watcher must follow newly created ancestors to the source root");
+  }
+  await handle.start();
+  assert.equal(rpc.calls.length, 0);
+  await fsApi.mkdir(first);
+  fsApi.emit(temp, "new-workspace");
+  await until(() => fsApi.callbacks.has(first));
+  await fsApi.writeFile(note, "created after startup", 1000);
+  fsApi.emit(first, "notes");
+  await until(() => rpc.documents.get(note)?.text === "created after startup");
+  await fsApi.writeFile(note, "later edit", 2000);
+  fsApi.emit(root, "note.md");
+  await until(() => rpc.documents.get(note)?.text === "later edit");
+  await fsApi.rmdir(second);
+  fsApi.emit(second, "notes");
+  await until(() => !rpc.documents.has(note) && fsApi.callbacks.has(first));
+  await fsApi.writeFile(note, "recreated ancestor", 3000);
+  fsApi.emit(first, "notes");
+  await until(() => rpc.documents.get(note)?.text === "recreated ancestor");
+  await handle.stop();
+  assert.equal(fsApi.callbacks.size, 0);
+});
+
 for (const replacedRoot of [true, false]) {
   test(`watchers resume after replacing a ${replacedRoot ? "root" : "nested directory"}`, async () => {
     class InodeFs extends FakeFsApi {

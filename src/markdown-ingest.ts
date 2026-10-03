@@ -770,27 +770,45 @@ class DirectoryMarkdownSourceAdapter implements MarkdownSourceAdapter {
   }
 
   private ensureRootParentWatcher(rootState: RootState): void {
-    const parent = path.dirname(rootState.root);
-    if (rootState.parentWatcher || parent === rootState.root || this.stopping || rootState.quarantined) return;
-    try {
-      // A watch on the root follows its inode, not a replacement at that path.
-      // Keep its parent watched even while the root itself is absent.
-      const watcher = this.fsApi.watch(parent, (event, filename) => {
-        if (this.stopping || rootState.parentWatcher !== watcher) return;
-        if (filename !== null && filename.toString() !== path.basename(rootState.root)) return;
-        if (event === "rename") this.closeDirectoryWatchers(rootState, rootState.root);
-        this.scheduleWatcherScan(rootState);
-      });
-      rootState.parentWatcher = watcher;
-      watcher.on("error", (error) => {
-        if (rootState.parentWatcher !== watcher) return;
-        rootState.parentWatcher = undefined;
-        watcher.close();
-        this.logger.warn?.(`[markdown-ingest] parent watch error for ${parent}: ${formatError(error)}`);
-        this.scheduleWatcherScan(rootState);
-      });
-    } catch (error) {
-      this.logger.warn?.(`[markdown-ingest] parent watch unavailable for ${parent}: ${formatError(error)}`);
+    let candidate = path.dirname(rootState.root);
+    if (rootState.parentWatcher || candidate === rootState.root || this.stopping || rootState.quarantined) return;
+    while (true) {
+      const watchedDir = candidate;
+      const childName = path.relative(watchedDir, rootState.root).split(path.sep)[0];
+      try {
+        // Missing directory trees need a watch on their nearest existing
+        // ancestor. Re-evaluate that ancestor whenever its child changes.
+        const watcher = this.fsApi.watch(watchedDir, (event, filename) => {
+          if (this.stopping || rootState.parentWatcher !== watcher) return;
+          const name = filename?.toString();
+          const selfRename = event === "rename" && name === path.basename(watchedDir);
+          if (name && name !== childName && !selfRename) return;
+          if (event === "rename") {
+            rootState.parentWatcher = undefined;
+            watcher.close();
+            this.closeDirectoryWatchers(rootState, rootState.root);
+          }
+          this.scheduleWatcherScan(rootState);
+        });
+        rootState.parentWatcher = watcher;
+        watcher.on("error", (error) => {
+          if (rootState.parentWatcher !== watcher) return;
+          rootState.parentWatcher = undefined;
+          watcher.close();
+          this.logger.warn?.(`[markdown-ingest] parent watch error for ${watchedDir}: ${formatError(error)}`);
+          this.scheduleWatcherScan(rootState);
+        });
+        return;
+      } catch (error) {
+        const parent = path.dirname(watchedDir);
+        const code = (error as NodeJS.ErrnoException).code;
+        if ((code === "ENOENT" || code === "ENOTDIR") && parent !== watchedDir) {
+          candidate = parent;
+          continue;
+        }
+        this.logger.warn?.(`[markdown-ingest] parent watch unavailable for ${watchedDir}: ${formatError(error)}`);
+        return;
+      }
     }
   }
 

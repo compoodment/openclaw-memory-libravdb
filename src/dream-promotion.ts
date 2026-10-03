@@ -266,26 +266,44 @@ export function createDreamPromotionHandle(
   }
 
   function ensureParentWatcher(parentDir: string): void {
-    const grandparent = path.dirname(parentDir);
-    if (state.parentWatcher || grandparent === parentDir) return;
-    try {
-      const watcher = fsApi.watch(grandparent, (event, filename) => {
-        if (!state.watching || state.parentWatcher !== watcher) return;
-        if (filename !== null && filename.toString() !== path.basename(parentDir)) return;
-        if (event === "rename") closeDiaryWatcher();
-        state.dirty = true;
-        void refreshDiary();
-      });
-      state.parentWatcher = watcher;
-      watcher.on("error", (error) => {
-        if (state.parentWatcher !== watcher) return;
-        state.parentWatcher = null;
-        watcher.close();
-        logger.warn?.(`[dream-promotion] parent watch error for ${grandparent}: ${formatError(error)}`);
-        void refreshDiary();
-      });
-    } catch (error) {
-      logger.warn?.(`[dream-promotion] parent watch unavailable for ${grandparent}: ${formatError(error)}`);
+    let candidate = path.dirname(parentDir);
+    if (state.parentWatcher || candidate === parentDir) return;
+    while (true) {
+      const watchedDir = candidate;
+      const childName = path.relative(watchedDir, parentDir).split(path.sep)[0];
+      try {
+        const watcher = fsApi.watch(watchedDir, (event, filename) => {
+          if (!state.watching || state.parentWatcher !== watcher) return;
+          const name = filename?.toString();
+          const selfRename = event === "rename" && name === path.basename(watchedDir);
+          if (name && name !== childName && !selfRename) return;
+          if (event === "rename") {
+            state.parentWatcher = null;
+            watcher.close();
+            closeDiaryWatcher();
+          }
+          state.dirty = true;
+          void refreshDiary();
+        });
+        state.parentWatcher = watcher;
+        watcher.on("error", (error) => {
+          if (state.parentWatcher !== watcher) return;
+          state.parentWatcher = null;
+          watcher.close();
+          logger.warn?.(`[dream-promotion] parent watch error for ${watchedDir}: ${formatError(error)}`);
+          void refreshDiary();
+        });
+        return;
+      } catch (error) {
+        const parent = path.dirname(watchedDir);
+        const code = (error as NodeJS.ErrnoException).code;
+        if ((code === "ENOENT" || code === "ENOTDIR") && parent !== watchedDir) {
+          candidate = parent;
+          continue;
+        }
+        logger.warn?.(`[dream-promotion] parent watch unavailable for ${watchedDir}: ${formatError(error)}`);
+        return;
+      }
     }
   }
 
