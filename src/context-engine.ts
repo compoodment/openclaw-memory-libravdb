@@ -3867,16 +3867,19 @@ export function buildContextEngineFactory(
           : selectAfterTurnMessages(args.messages, args.prePromptMessageCount, logger);
         // The same advancement retry carries the same source transcript.
         // Preserve single-message ACK prefixes even when the host omitted IDs.
+        // A recovered commit must keep the same IDs on a normal replay after
+        // restart, when recoveryPending and the in-memory key memo are gone.
         // Legacy afterTurn calls without advancement keys keep their ID policy.
-        const identityScope = recoveryPending
-          ? `recovery:${sessionId}`
-          : args[ADVANCEMENT_IDENTITY] ? `advancement:${args[ADVANCEMENT_IDENTITY]}` : undefined;
+        const identityScope = args[ADVANCEMENT_IDENTITY]
+          ? `advancement:${args[ADVANCEMENT_IDENTITY]}`
+          : recoveryPending ? `recovery:${sessionId}` : undefined;
+        const sourceOffset = args.messages.length - source.length;
         const identifiedSource = identityScope ? source.map((message, index) => {
           if (typeof message.id === "string" && message.id.length > 0) return message;
           const hash = createHash("sha256").update(JSON.stringify([
             sessionId,
             identityScope,
-            index,
+            sourceOffset + index,
             message.role,
             normalizeKernelContent(message.content, { retainOpenClawContext: true }),
           ])).digest("hex");

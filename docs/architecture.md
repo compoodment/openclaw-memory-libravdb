@@ -58,6 +58,10 @@ integers are checked before conversion to local indices; an invalid cursor
 cannot fall back to optimistic success. Successful responses from older
 daemons without cursors retain their compatibility behavior.
 
+Messages without host IDs use stable advancement IDs and source positions in
+both normal ingestion and recovery, so an exact commit replay after restart
+still matches the persisted checkpoint.
+
 ### `assemble`
 
 The context engine queries the relevant memory scopes, ranks the results, fits
