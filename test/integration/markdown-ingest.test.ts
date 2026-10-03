@@ -414,16 +414,14 @@ test("overlapping Markdown roots cannot interleave replacement chunks for one do
   const blocked = new Promise<void>(resolve => { release = resolve; });
   let firstWrite!: () => void;
   const writeReady = new Promise<void>(resolve => { firstWrite = resolve; });
-  let bothRead!: () => void;
-  const readReady = new Promise<void>(resolve => { bothRead = resolve; });
-  let reads = 0;
+  let bothScanned!: () => void;
+  const scanReady = new Promise<void>(resolve => { bothScanned = resolve; });
+  let scans = 0;
   class ObservedFs extends FakeFsApi {
-    override async openReadStream(filePath: string) {
-      const stream = await super.openReadStream(filePath);
-      return { ...stream, async close() {
-        await stream.close();
-        if (++reads === 2) bothRead();
-      } };
+    override async stat(filePath: string) {
+      const result = await super.stat(filePath);
+      if (++scans === 2) bothScanned();
+      return result;
     }
   }
   const fsApi = new ObservedFs();
@@ -450,15 +448,15 @@ test("overlapping Markdown roots cannot interleave replacement chunks for one do
     await fsp.rm(tempRoot, { recursive: true, force: true });
   });
   await handle.start();
-  await fsApi.writeFile(file, "prefix" + "x".repeat(6000) + "suffix");
+  await fsApi.writeFile(file, "prefix" + "x".repeat(6000) + "suffix", 1000);
   const callbacks = fsApi.callbacks.get(child)!;
   assert.equal(callbacks.length, 2, "both configured roots watch the shared directory");
   callbacks[0]!("change", "shared.md");
   await writeReady;
   const content = "prefix" + "y".repeat(6000) + "suffix";
-  await fsApi.writeFile(file, content);
+  await fsApi.writeFile(file, content, 2000);
   callbacks[1]!("change", "shared.md");
-  await readReady;
+  await scanReady;
   await yieldImmediate();
   release();
   await handle.stop();
