@@ -194,6 +194,121 @@ function snapshotPath(tempRoot: string, kind: "generic" | "obsidian" = "generic"
   return path.join(tempRoot, `${kind}-snapshot.json`);
 }
 
+for (const initiallyTagged of [false, true]) {
+  test(`overlapping adapters retain generic Markdown when Obsidian ${initiallyTagged ? "stops accepting" : "does not accept"} it`, async t => {
+    const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "libravdb-overlapping-adapters-"));
+    const root = path.join(tempRoot, "vault");
+    const file = path.join(root, "note.md");
+    const fsApi = new FakeFsApi();
+    const rpc = new FakeRpcClient();
+    await fsApi.writeFile(file, initiallyTagged ? "#project tagged note" : "plain generic note", 1000);
+    const handle = createMarkdownIngestionHandle({
+      markdownIngestionEnabled: true, markdownIngestionRoots: [root],
+      markdownIngestionObsidianEnabled: true, markdownIngestionObsidianRoots: [root],
+      markdownIngestionSnapshotPath: snapshotPath(tempRoot),
+      markdownIngestionObsidianSnapshotPath: snapshotPath(tempRoot, "obsidian"),
+    }, async () => rpc as never, { info() {}, warn() {}, error() {} }, fsApi as never);
+    t.after(async () => { await handle.stop(); await fsp.rm(tempRoot, { recursive: true, force: true }); });
+    await handle.start();
+    if (initiallyTagged) {
+      assert.ok(rpc.documents.has(file));
+      await fsApi.writeFile(file, "plain generic note after removing tag", 2000);
+      await handle.refresh();
+    }
+    assert.match(rpc.documents.get(file)?.text ?? "", /plain generic note/);
+    await handle.refresh();
+    assert.ok(rpc.documents.has(file), "unchanged snapshots must not strand a deleted shared document");
+    await fsApi.rm(file);
+    await handle.refresh();
+    assert.equal(rpc.documents.has(file), false, "actual file deletion still retires the shared document");
+  });
+}
+
+test("overlapping adapters load all persisted owners before pruning on restart", async t => {
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "libravdb-overlapping-restart-"));
+  const root = path.join(tempRoot, "vault");
+  const file = path.join(root, "note.md");
+  const fsApi = new FakeFsApi();
+  const rpc = new FakeRpcClient();
+  await fsApi.writeFile(file, "#project keep this Obsidian note", 1000);
+  const cfg = {
+    markdownIngestionEnabled: true, markdownIngestionRoots: [root],
+    markdownIngestionObsidianEnabled: true, markdownIngestionObsidianRoots: [root],
+    markdownIngestionSnapshotPath: snapshotPath(tempRoot),
+    markdownIngestionObsidianSnapshotPath: snapshotPath(tempRoot, "obsidian"),
+  };
+  const logger = { info() {}, warn() {}, error() {} };
+  const first = createMarkdownIngestionHandle(cfg, async () => rpc as never, logger, fsApi as never);
+  await first.start();
+  await first.stop();
+  assert.ok(rpc.documents.has(file));
+  const next = createMarkdownIngestionHandle({ ...cfg, markdownIngestionInclude: ["keep.md"] }, async () => rpc as never, logger, fsApi as never);
+  t.after(async () => { await next.stop(); await fsp.rm(tempRoot, { recursive: true, force: true }); });
+  await next.start();
+  assert.ok(rpc.documents.has(file), "generic pruning must retain a document still managed by Obsidian");
+  await fsApi.rm(file);
+  await next.refresh();
+  assert.equal(rpc.documents.has(file), false);
+});
+
+test("overlapping watcher scans do not retire a replacement before its ownership is committed", async t => {
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "libravdb-overlapping-watchers-"));
+  const root = path.join(tempRoot, "vault");
+  const file = path.join(root, "note.md");
+  let firstStat = true;
+  let replacing = false;
+  let replacementStats = 0;
+  let scannedBoth!: () => void;
+  const bothScanned = new Promise<void>(resolve => { scannedBoth = resolve; });
+  class RacingFs extends FakeFsApi {
+    override async stat(filePath: string) {
+      if (filePath === file && firstStat) {
+        firstStat = false;
+        throw Object.assign(new Error("temporarily unreadable to generic scan"), { code: "EACCES" });
+      }
+      if (filePath === file && replacing && ++replacementStats === 2) scannedBoth();
+      return super.stat(filePath);
+    }
+  }
+  let published!: () => void;
+  const writePublished = new Promise<void>(resolve => { published = resolve; });
+  let acknowledge!: () => void;
+  const acknowledgement = new Promise<void>(resolve => { acknowledge = resolve; });
+  class RacingRpc extends FakeRpcClient {
+    override async ingestMarkdownDocument(params: Parameters<FakeRpcClient["ingestMarkdownDocument"]>[0]) {
+      const result = await super.ingestMarkdownDocument(params);
+      if (replacing && params.sourceMeta.sourceKind === "generic") {
+        published();
+        await acknowledgement;
+      }
+      return result;
+    }
+  }
+  const fsApi = new RacingFs();
+  const rpc = new RacingRpc();
+  await fsApi.writeFile(file, "#project original Obsidian note", 1000);
+  const handle = createMarkdownIngestionHandle({
+    markdownIngestionEnabled: true, markdownIngestionRoots: [root],
+    markdownIngestionObsidianEnabled: true, markdownIngestionObsidianRoots: [root],
+    markdownIngestionDebounceMs: 0,
+    markdownIngestionSnapshotPath: snapshotPath(tempRoot),
+    markdownIngestionObsidianSnapshotPath: snapshotPath(tempRoot, "obsidian"),
+  }, async () => rpc as never, { info() {}, warn() {}, error() {} }, fsApi as never);
+  t.after(async () => { acknowledge(); await handle.stop(); await fsp.rm(tempRoot, { recursive: true, force: true }); });
+  await handle.start();
+  assert.ok(rpc.documents.has(file), "Obsidian seeded the document after generic's transient stat failure");
+  await fsApi.writeFile(file, "plain generic replacement", 2000);
+  replacing = true;
+  fsApi.triggerAll();
+  await Promise.all([writePublished, bothScanned]);
+  // Allow all immediately runnable watcher continuations to finish before the
+  // generic write's ACK; its daemon content is already visible at this point.
+  await new Promise<void>(resolve => setImmediate(resolve));
+  acknowledge();
+  await handle.stop();
+  assert.match(rpc.documents.get(file)?.text ?? "", /plain generic replacement/);
+});
+
 test("markdown ingestion roots stay inert unless explicitly enabled", async () => {
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "libravdb-markdown-disabled-"));
   const filePath = path.join(tempRoot, "MEMORY.md");

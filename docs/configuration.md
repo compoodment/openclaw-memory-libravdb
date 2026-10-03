@@ -169,6 +169,13 @@ Configured markdown roots are ignored unless the matching enable flag is set to
 `true`. Set `markdownIngestionEnabled: true` for generic roots and
 `markdownIngestionObsidianEnabled: true` for Obsidian vault roots.
 
+Generic and Obsidian roots may overlap within one ingestion handle. They share
+the file's daemon document: removing an Obsidian tag or excluding it from one
+adapter does not delete it while the other adapter still manages it. Persisted
+ownership is loaded before startup pruning, and concurrent operations on the
+same file are serialized. This coordination does not span independent plugin
+instances or processes.
+
 ## Continuity
 
 | Key | Type | Default | Notes |
