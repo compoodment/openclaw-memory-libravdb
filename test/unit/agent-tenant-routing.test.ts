@@ -125,10 +125,14 @@ test("scoped runtime retries only failed startup and drains every tenant before 
   t.mock.method(LibravDBClient.prototype, "close", function(this: LibravDBClient) { closed.push(tenant(this)); });
   const runtime = createPluginRuntime({ tenantId: "default", tenantIdByAgent: { a: "tenant-a", b: "tenant-b" } }, { warn() {}, error() {} });
   const getClient: ClientGetter = runtime.getClient;
+  assert.equal(runtime.resolveWriteTenantKey!({ sessionId: "remember-a", sessionKey: "agent:a:main" }), "tenant-a");
+  assert.equal(runtime.resolveWriteTenantKey!({ sessionId: "remember-a" }), "tenant-a");
+  assert.equal(attempts.size, 0, "checkpoint scope resolution must not start the daemon");
   await assert.rejects(getClient({ agentId: "a" }), /temporary handshake failure/);
   const b = await getClient({ agentId: "b" });
   const [a1, a2] = await Promise.all([getClient({ agentId: "a" }), getClient({ sessionKey: "agent:a:main" })]);
   assert.equal(a1, a2);
+  assert.equal(await getClient({ sessionId: "remember-a" }), a1, "checkpoint and client routing share the remembered binding");
   assert.equal(await getClient({ agentId: "b" }), b);
   assert.notEqual(await getClient(), a1, "background services retain the configured default tenant");
   runtime.onShutdown(async () => { assert.equal(await getClient({ agentId: "a" }), a1); });

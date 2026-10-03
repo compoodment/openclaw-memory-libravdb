@@ -47,6 +47,8 @@ export type RuntimeShutdownTask = () => Promise<void> | void;
 
 export interface PluginRuntime {
   getClient: ClientGetter;
+  /** Resolve the same write tenant as getClient without starting the daemon. */
+  resolveWriteTenantKey?(scope: { sessionId?: string; sessionKey?: string; agentId?: string }): string;
   emitLifecycleHint(hint: LifecycleHint): Promise<void>;
   onShutdown(task: RuntimeShutdownTask): void;
   shutdown(): Promise<void>;
@@ -99,10 +101,7 @@ export function createPluginRuntime(
   let shuttingDown = false;
   const shutdownTasks: RuntimeShutdownTask[] = [];
 
-  const ensureStarted = async (scope: ClientScope = {}): Promise<LibravDBClient> => {
-    if (stopped) {
-      throw new Error("LibraVDB plugin runtime has been shut down");
-    }
+  const resolveScope = (scope: ClientScope = {}) => {
     let agentId = scope.agentId?.trim() || /^agent:([^:]+):/.exec(scope.sessionKey ?? "")?.[1];
     if (scope.sessionId) {
       if (agentId) sessionAgents.set(scope.sessionId, agentId);
@@ -110,6 +109,14 @@ export function createPluginRuntime(
     }
     const tenantKey = resolveTenantKey(cfg, agentId);
     const readTenants = resolveReadTenants(cfg, agentId) ?? [];
+    return { tenantKey, readTenants };
+  };
+
+  const ensureStarted = async (scope: ClientScope = {}): Promise<LibravDBClient> => {
+    if (stopped) {
+      throw new Error("LibraVDB plugin runtime has been shut down");
+    }
+    const { tenantKey, readTenants } = resolveScope(scope);
     const key = JSON.stringify([tenantKey, readTenants]);
     let pending = started.get(key);
     if (!pending) {
@@ -142,6 +149,9 @@ export function createPluginRuntime(
   };
 
   return {
+    resolveWriteTenantKey(scope) {
+      return resolveScope(scope).tenantKey;
+    },
     async getClient(scope) {
       return await ensureStarted(scope);
     },
