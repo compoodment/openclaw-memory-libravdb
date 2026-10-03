@@ -21,6 +21,25 @@ export const MEMORY_ID = "libravdb-memory";
 const LIGHTWEIGHT_MODES = new Set(["cli-metadata", "setup-only"]);
 const RUNTIME_CLEANUP_SHUTDOWN_REASONS = new Set(["delete"]);
 
+async function getCompactionClient(getClient: ClientGetter, signal?: AbortSignal) {
+  signal?.throwIfAborted();
+  if (!signal) return getClient();
+  let onAbort!: () => void;
+  const canceled = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    // Cancel this caller's wait without aborting startup shared with other
+    // memory operations. The runtime retains and observes the startup promise.
+    const client = await Promise.race([getClient(), canceled]);
+    signal.throwIfAborted();
+    return client;
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
 export function shouldShutdownRuntimeForLifecycleCleanup(
   reason: string,
   sessionKey?: string,
@@ -227,12 +246,12 @@ export function register(api: OpenClawPluginApi) {
   // compaction backend. When agents.defaults.compaction.provider is
   // set to "libravdb-memory", the framework's compaction safeguard
   // delegates summarization here instead of burning LLM tokens.
-  type CompactionProviderApi = { registerCompactionProvider?: (p: { id: string; label: string; summarize(params: { messages: unknown[]; previousSummary?: string }): Promise<string> }) => void };
+  type CompactionProviderApi = { registerCompactionProvider?: (p: { id: string; label: string; summarize(params: { messages: unknown[]; previousSummary?: string; signal?: AbortSignal }): Promise<string> }) => void };
   (api as unknown as CompactionProviderApi).registerCompactionProvider?.({
     id: MEMORY_ID,
     label: "LibraVDB Extractive Summarization",
-    async summarize({ messages, previousSummary }) {
-      const client = await runtime.getClient();
+    async summarize({ messages, previousSummary, signal }) {
+      const client = await getCompactionClient(runtime.getClient, signal);
       const summary = previousSummary?.trim();
       // OpenClaw keeps earlier compacted history outside the current messages.
       // Feed it back into summarization so subsequent compactions can retain
@@ -243,7 +262,8 @@ export function register(api: OpenClawPluginApi) {
       const result = await client.summarizeMessages({
         messages: sourceMessages.map((m) => normalizeKernelMessage(m as { role: string; content: unknown; id?: string })) as any,
         maxOutputTokens: 64,
-      } as any);
+      } as any, { signal });
+      signal?.throwIfAborted();
       return result.summaryText;
     },
   });
