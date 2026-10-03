@@ -6,6 +6,7 @@ import { buildRulesContext } from "./rules.js";
 import { resolveReadTenants } from "./identity.js";
 
 import type { PluginRuntime } from "./plugin-runtime.js";
+import type { LibravDBClient } from "./libravdb-client.js";
 import type {
   LoggerLike,
   PluginConfig,
@@ -2102,11 +2103,25 @@ export function buildContextEngineFactory(
     setOptimizationMemoCacheSize(cfg.optimizationMemoCacheSize);
   }
 
-  const predictiveContextCache = new Map<string, import("./types.js").PredictedContext[]>();
+  const predictiveContextCache = new Map<string, {
+    client: LibravDBClient;
+    predictions: import("./types.js").PredictedContext[];
+  }>();
   const compactedProjectionSessions = compactedProjectionState.activeSessions;
   const PREDICTIVE_CACHE_MAX_SIZE = 100;
   // BeforeTurnKernel state
   const turnCache = new TurnMemoryCache(100);
+  // Numeric IDs separate cache/attempt/circuit keys without retaining clients.
+  const recallClientIds = new WeakMap<LibravDBClient, number>();
+  let nextRecallClientId = 1;
+  function recallClientId(client: LibravDBClient): number {
+    let id = recallClientIds.get(client);
+    if (id === undefined) {
+      id = nextRecallClientId++;
+      recallClientIds.set(client, id);
+    }
+    return id;
+  }
   const circuitBreakers = new Map<string, FailureState>();
   const beforeTurnAttempts = new Map<string, string>();
   const CIRCUIT_STATE_MAX_SIZE = 200;
@@ -3167,57 +3182,56 @@ export function buildContextEngineFactory(
         }
       }
 
-      // BeforeTurnKernel: semantic memory retrieval against the current user query.
-      // Skip for automated triggers (heartbeat, cron, memory, overflow) — saves
-      // an embedding call and RPC round trip on non-interactive turns.
-      const btLog = cfg.beforeTurnDebug
-        ? (msg: string) => logger.info?.(msg)
-        : (_msg: string) => {};
-      let beforeTurnPredictions: BeforeTurnKernelResponse["predictions"] | null = null;
-      let beforeTurnQueryHint: string | null = null;
-      const beforeTurnSignature = turnBoundarySignature;
-      if (cfg.beforeTurnEnabled === false) {
-        btLog(`BeforeTurnKernel disabled by config sessionId=${sessionId}`);
-      } else if (!isInteractiveTrigger(sessionId)) {
-        btLog(`BeforeTurnKernel skipped: non-interactive trigger sessionId=${sessionId}`);
-      } else {
-        beforeTurnQueryHint = extractQueryHint(messages, (text) =>
-          typeof text === "string" ? text.replace(OPENCLAW_LEADING_TIMESTAMP_PREFIX_RE, "").trim() : text,
-        );
-        if (!beforeTurnQueryHint) {
-          btLog(`BeforeTurnKernel skipped: no query hint extracted sessionId=${sessionId}`);
-        } else if (!isNewUserTurn(messages as Parameters<typeof isNewUserTurn>[0])) {
-          btLog(`BeforeTurnKernel skipped: not a new user turn sessionId=${sessionId}`);
-          beforeTurnQueryHint = null;
-        }
-        if (beforeTurnQueryHint && isBeforeTurnCircuitOpen(sessionId)) {
-          btLog(`BeforeTurnKernel skipped: circuit open sessionId=${sessionId}`);
-          beforeTurnQueryHint = null;
-        }
-        if (beforeTurnQueryHint) {
-          btLog(`BeforeTurnKernel calling sessionId=${sessionId} hint=${beforeTurnQueryHint.slice(0, 50)}`);
-          // Transcript windows can have equal lengths across distinct turns.
-          // Use the full normalized user boundary, including message identity,
-          // rather than a message count and truncated query prefix.
-          const cached = beforeTurnSignature
-            ? turnCache.get(sessionId, beforeTurnSignature) as BeforeTurnKernelResponse | undefined
-            : undefined;
-          if (cached?.predictions) {
-            beforeTurnPredictions = cached.predictions;
-            beforeTurnQueryHint = null;
-          }
-        }
-        if (beforeTurnQueryHint) {
-          if (!beforeTurnSignature || hasAttemptedBeforeTurn(sessionId, beforeTurnSignature)) {
-            beforeTurnQueryHint = null;
-          }
-        }
-      }
-
       try {
         const client = await runtime.getClient();
-
-
+        // BeforeTurnKernel: semantic memory retrieval against the current user query.
+        // Skip for automated triggers (heartbeat, cron, memory, overflow) — saves
+        // an embedding call and RPC round trip on non-interactive turns.
+        const btLog = cfg.beforeTurnDebug
+          ? (msg: string) => logger.info?.(msg)
+          : (_msg: string) => {};
+        let beforeTurnPredictions: BeforeTurnKernelResponse["predictions"] | null = null;
+        let beforeTurnQueryHint: string | null = null;
+        const clientId = recallClientId(client);
+        const beforeTurnStateKey = JSON.stringify([sessionId, clientId]);
+        const beforeTurnSignature = turnBoundarySignature ? `${clientId}:${turnBoundarySignature}` : null;
+        if (cfg.beforeTurnEnabled === false) {
+          btLog(`BeforeTurnKernel disabled by config sessionId=${sessionId}`);
+        } else if (!isInteractiveTrigger(sessionId)) {
+          btLog(`BeforeTurnKernel skipped: non-interactive trigger sessionId=${sessionId}`);
+        } else {
+          beforeTurnQueryHint = extractQueryHint(messages, (text) =>
+            typeof text === "string" ? text.replace(OPENCLAW_LEADING_TIMESTAMP_PREFIX_RE, "").trim() : text,
+          );
+          if (!beforeTurnQueryHint) {
+            btLog(`BeforeTurnKernel skipped: no query hint extracted sessionId=${sessionId}`);
+          } else if (!isNewUserTurn(messages as Parameters<typeof isNewUserTurn>[0])) {
+            btLog(`BeforeTurnKernel skipped: not a new user turn sessionId=${sessionId}`);
+            beforeTurnQueryHint = null;
+          }
+          if (beforeTurnQueryHint && isBeforeTurnCircuitOpen(beforeTurnStateKey)) {
+            btLog(`BeforeTurnKernel skipped: circuit open sessionId=${sessionId}`);
+            beforeTurnQueryHint = null;
+          }
+          if (beforeTurnQueryHint) {
+            btLog(`BeforeTurnKernel calling sessionId=${sessionId} hint=${beforeTurnQueryHint.slice(0, 50)}`);
+            // Transcript windows can have equal lengths across distinct turns.
+            // Use the full normalized user boundary, including message identity,
+            // rather than a message count and truncated query prefix.
+            const cached = beforeTurnSignature
+              ? turnCache.get(sessionId, beforeTurnSignature) as BeforeTurnKernelResponse | undefined
+              : undefined;
+            if (cached?.predictions) {
+              beforeTurnPredictions = cached.predictions;
+              beforeTurnQueryHint = null;
+            }
+          }
+          if (beforeTurnQueryHint) {
+            if (!beforeTurnSignature || hasAttemptedBeforeTurn(beforeTurnStateKey, beforeTurnSignature)) {
+              beforeTurnQueryHint = null;
+            }
+          }
+        }
 
         let enforced: OpenClawCompatibleAssembleResult;
         let cachedSystemPrompt: string | undefined;
@@ -3275,7 +3289,7 @@ export function buildContextEngineFactory(
           // BeforeTurnKernel RPC call (reuses the same client)
           if (beforeTurnQueryHint) {
             if (beforeTurnSignature) {
-              markBeforeTurnAttempt(sessionId, beforeTurnSignature);
+              markBeforeTurnAttempt(beforeTurnStateKey, beforeTurnSignature);
             }
             try {
               const beforeTurnTimeout = cfg.beforeTurnTimeoutMs ?? 5000;
@@ -3310,9 +3324,9 @@ export function buildContextEngineFactory(
                 : btResult.predictions;
               if (beforeTurnSignature) turnCache.set(sessionId, beforeTurnSignature, { predictions: clamped });
               beforeTurnPredictions = clamped;
-              clearBeforeTurnCircuit(sessionId);
+              clearBeforeTurnCircuit(beforeTurnStateKey);
             } catch (err) {
-              trackBeforeTurnFailure(sessionId, err);
+              trackBeforeTurnFailure(beforeTurnStateKey, err);
               logger.warn?.(
                 `BeforeTurnKernel failed for session ${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
               );
@@ -3427,7 +3441,8 @@ export function buildContextEngineFactory(
             args.tokenBudget,
             compactionProjectionActive,
           );
-          const predictions = predictiveContextCache.get(sessionId) || [];
+          const cachedPredictions = predictiveContextCache.get(sessionId);
+          const predictions = cachedPredictions?.client === client ? cachedPredictions.predictions : [];
           predictiveContextCache.delete(sessionId);
           if (predictions.length > 0) {
             const effectiveBudget = normalizeTokenBudget(args.tokenBudget) != null
@@ -4003,7 +4018,7 @@ export function buildContextEngineFactory(
                 const oldest = predictiveContextCache.keys().next().value;
                 if (oldest !== undefined) predictiveContextCache.delete(oldest);
               }
-              predictiveContextCache.set(sessionId, predictions);
+              predictiveContextCache.set(sessionId, { client, predictions });
               logger.info?.(
                 `LibraVDB predictive graph returned predictions sessionId=${sessionId} ` +
                 `count=${predictions.length}`,
