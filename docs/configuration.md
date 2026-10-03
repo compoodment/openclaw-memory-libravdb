@@ -207,6 +207,11 @@ and recency-adjusted scoring pass that runs after the initial vector search.
 
 ## Dream promotion
 
+A confirmed missing dream diary reconciles that source with an empty entry list,
+including when it was deleted while the plugin was offline. Permission and other
+transient read errors retain existing entries. Failed reconciliation is retried on
+a subsequent refresh; recreating the diary promotes its entries again.
+
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `dreamPromotionEnabled` | boolean | `false` | Enable dream diary promotion |
