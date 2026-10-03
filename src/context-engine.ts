@@ -323,6 +323,7 @@ class SessionLifecycleChangedError extends Error {
 }
 
 interface PostToolContextCache {
+  client: import("./libravdb-client.js").LibravDBClient;
   boundarySignature: string;
   systemPromptAddition: string;
 }
@@ -3223,7 +3224,7 @@ export function buildContextEngineFactory(
 
         if (isPostToolContinuation) {
           const cached = postToolRecallCache.get(sessionId);
-          if (cached && turnBoundarySignature && cached.boundarySignature === turnBoundarySignature) {
+          if (cached?.client === client && turnBoundarySignature && cached.boundarySignature === turnBoundarySignature) {
             cachedSystemPrompt = cached.systemPromptAddition;
             logger.info?.(`LibraVDB skipping assemble context search for post-tool continuation sessionId=${sessionId}`);
 
@@ -3571,6 +3572,7 @@ export function buildContextEngineFactory(
             if (oldest !== undefined) postToolRecallCache.delete(oldest);
           }
           postToolRecallCache.set(sessionId, {
+            client,
             boundarySignature: turnBoundarySignature,
             systemPromptAddition: replaySafe.systemPromptAddition,
           });

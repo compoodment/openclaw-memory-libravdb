@@ -100,6 +100,8 @@ address, explicitly set `grpcEndpointTlsMode: "tls"` to match:
 Recall cached for a turn is reused only while the normalized transcript through
 its latest user message is unchanged. A new message identity or changed query
 refreshes recall even when the transcript has the same length or query prefix.
+Post-tool continuations also require the same daemon client; changing runtime or
+tenant clients refreshes context instead of reusing the previous client's recall.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
