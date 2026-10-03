@@ -42,6 +42,8 @@ export type RuntimeShutdownTask = () => Promise<void> | void;
 
 export interface PluginRuntime {
   getClient: ClientGetter;
+  /** Resolve the same write tenant as getClient without starting the daemon. */
+  resolveWriteTenantKey?(scope: { sessionId?: string; sessionKey?: string; agentId?: string }): string;
   emitLifecycleHint(hint: LifecycleHint): Promise<void>;
   onShutdown(task: RuntimeShutdownTask): void;
   shutdown(): Promise<void>;
