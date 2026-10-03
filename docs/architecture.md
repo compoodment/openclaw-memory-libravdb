@@ -56,6 +56,13 @@ The context engine queries the relevant memory scopes, ranks the results, fits
 them to the current token budget, and injects the selected items as synthetic
 system messages.
 
+For conversation continuity, the plugin also keeps a best-effort local copy of
+the last user and assistant messages per session key. Each entry is replaced
+atomically and read when needed, so separate engine instances preserve one
+another's entries and observe current saved context. The vector service remains
+the source of truth; failure to update this cache does not reject an acknowledged
+turn.
+
 ### `compact`
 
 Compaction is explicit rather than background-only. The host can request a

@@ -97,6 +97,12 @@ address, explicitly set `grpcEndpointTlsMode: "tls"` to match:
 
 ## Retrieval
 
+Recent conversation continuity is saved separately for each session key under
+`OPENCLAW_STATE_DIR/libravdb-continuity` (or `~/.openclaw/libravdb-continuity`).
+Separate engine instances read the latest saved value and cannot overwrite other
+sessions' entries. Existing `libravdb-continuity-cache.json` entries remain a
+read-only fallback until each session gets a newer individual entry.
+
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `topK` | number | — | Max results per search |
