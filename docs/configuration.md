@@ -109,6 +109,11 @@ address, explicitly set `grpcEndpointTlsMode: "tls"` to match:
 
 ## Ingestion gating
 
+With `excludeSubagents: true`, a child marked by `prepareSubagentSpawn` remains
+excluded across context-engine replacement and parent disposal within the same
+plugin runtime. Spawn rollback, child completion, and runtime shutdown clear the
+marker. Independent runtimes do not share exclusion state.
+
 Gating thresholds and scoring weights are owned by the vector service and configured via
 service environment variables. See the service documentation for tuning details.
 
